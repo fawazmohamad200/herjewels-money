@@ -95,14 +95,11 @@ export default function Home() {
       capCod += (Number(it.qty_cod) || 0) * Number(it.unit_cost);
       capPaid += (Number(it.qty_paid) || 0) * Number(it.unit_cost);
     });
-    const fee = (Number(w.delivered) || 0) * 3.4 + (Number(w.cancelled) || 0) * 4;
-    const revCod = Number(w.revenue_cod) || 0;
-    const revPaid = Number(w.revenue_paid) || 0;
-    const cashTopspeed = revCod - fee;
-    const cashPaid = revPaid;
+    const revCod = Number(w.revenue_cod) || 0;   // already net - what Topspeed actually pays you
+    const revPaid = Number(w.revenue_paid) || 0; // already net - prepaid cash received
     return {
       revenue: revCod + revPaid, capital: capCod + capPaid,
-      cashTopspeed, cashPaid, cash: cashTopspeed + cashPaid, fee,
+      cashTopspeed: revCod, cashPaid: revPaid, cash: revCod + revPaid,
     };
   };
 
@@ -123,8 +120,7 @@ export default function Home() {
       revenueTotal += t.revenue;
     });
     legacy.forEach(b => {
-      const fee = (Number(b.delivered) || 0) * 3.4 + (Number(b.cancelled) || 0) * 4;
-      topspeedCash += (Number(b.revenue) || 0) - fee;
+      topspeedCash += Number(b.revenue) || 0;
       capitalTotal += Number(b.capital) || 0;
       deliveredTotal += Number(b.delivered) || 0;
       cancelledTotal += Number(b.cancelled) || 0;
@@ -219,8 +215,7 @@ function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDa
         <h2>Business in this range <small>{c.deliveredTotal} delivered &middot; {c.cancelledTotal} cancelled &middot; {weeksCount} weeks logged total</small></h2>
         <table className="tbl">
           <tbody>
-            <tr><td>Revenue (COD + prepaid)</td><td>{money(c.revenueTotal)}</td></tr>
-            <tr><td>Topspeed fees paid</td><td className="neg">-{money(c.revenueTotal - c.topspeedCash)}</td></tr>
+            <tr><td>Revenue (COD + prepaid, already net of Topspeed fees)</td><td>{money(c.revenueTotal)}</td></tr>
             <tr><td>Cash Topspeed + prepaid handed you</td><td>{money(c.topspeedCash)}</td></tr>
             <tr><td>Ads spent</td><td className="neg">-{money(c.adsTotal)}</td></tr>
             <tr><td>Product capital tied up in stock</td><td className="neg">-{money(c.capitalTotal)}</td></tr>
@@ -381,10 +376,10 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
           </div>
           <div className="newweek-grid">
-            <div className="field"><label>Revenue - COD (real $ from paper)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
+            <div className="field"><label>Revenue - COD (Topspeed's "Amount To Be Paid", already net)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
             <div className="field"><label>Revenue - Paid (real $ from Shopify)</label><input type="number" step="0.01" value={revenuePaid} onChange={e => setRevenuePaid(e.target.value)} /></div>
           </div>
-          <div className="note" style={{ marginBottom: 10 }}>Type the actual dollar totals here - already includes any discounts. The product grid below only sets Capital, not revenue.</div>
+          <div className="note" style={{ marginBottom: 10 }}>Type the exact "Amount To Be Paid" total from the paper's summary box - already net of Topspeed's delivery fee, no further deduction happens. The product grid below only sets Capital, not revenue.</div>
           <input className="search" placeholder="Search a product..." value={filter} onChange={e => setFilter(e.target.value)} />
           <div className="qtyhead"><div>Product</div><div>COD</div><div>Paid</div><div>Capital</div></div>
           <div className="qtygrid">
