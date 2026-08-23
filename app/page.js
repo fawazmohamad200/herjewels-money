@@ -90,14 +90,14 @@ export default function Home() {
   }
 
   const weekTotals = (w) => {
-    let revCod = 0, capCod = 0, revPaid = 0, capPaid = 0;
+    let capCod = 0, capPaid = 0;
     (w.items || []).forEach(it => {
-      revCod += (Number(it.qty_cod) || 0) * Number(it.unit_price);
       capCod += (Number(it.qty_cod) || 0) * Number(it.unit_cost);
-      revPaid += (Number(it.qty_paid) || 0) * Number(it.unit_price);
       capPaid += (Number(it.qty_paid) || 0) * Number(it.unit_cost);
     });
     const fee = (Number(w.delivered) || 0) * 3.4 + (Number(w.cancelled) || 0) * 4;
+    const revCod = Number(w.revenue_cod) || 0;
+    const revPaid = Number(w.revenue_paid) || 0;
     const cashTopspeed = revCod - fee;
     const cashPaid = revPaid;
     return {
@@ -250,6 +250,8 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   const [date, setDate] = useState(todayStr());
   const [delivered, setDelivered] = useState('');
   const [cancelled, setCancelled] = useState('');
+  const [revenueCod, setRevenueCod] = useState('');
+  const [revenuePaid, setRevenuePaid] = useState('');
   const [filter, setFilter] = useState('');
   const [qty, setQty] = useState({}); // productId -> {cod, paid}
   const [saving, setSaving] = useState(false);
@@ -258,19 +260,19 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
     !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
   );
 
-  const live = useMemo(() => {
-    let revenue = 0, capital = 0;
+  const liveCapital = useMemo(() => {
+    let capital = 0;
     products.forEach(p => {
       const q = qty[p.id] || {};
       const cod = Number(q.cod) || 0, paid = Number(q.paid) || 0;
-      revenue += (cod + paid) * Number(p.price);
       capital += (cod + paid) * Number(p.cost);
     });
-    return { revenue, capital };
+    return capital;
   }, [qty, products]);
 
   function startAdd() {
-    setAdding(true); setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled(''); setFilter(''); setQty({});
+    setAdding(true); setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
+    setRevenueCod(''); setRevenuePaid(''); setFilter(''); setQty({});
   }
 
   async function saveWeek() {
@@ -279,6 +281,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
       const { data: weekRow, error: werr } = await supabase.from('weeks').insert({
         label: label || `Week ${date}`, week_date: date,
         delivered: Number(delivered) || 0, cancelled: Number(cancelled) || 0,
+        revenue_cod: Number(revenueCod) || 0, revenue_paid: Number(revenuePaid) || 0,
       }).select().single();
       if (werr) throw werr;
 
@@ -354,7 +357,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
                         return (
                           <div key={idx} className="mini">
                             {p ? p.name + (p.variant ? ' - ' + p.variant : '') : 'Unknown product'}:
-                            {' '}COD <b>{it.qty_cod}</b> &middot; Paid <b>{it.qty_paid}</b> &middot; {money((it.qty_cod + it.qty_paid) * it.unit_cost)}
+                            {' '}COD <b>{it.qty_cod}</b> &middot; Paid <b>{it.qty_paid}</b> &middot; capital {money((it.qty_cod + it.qty_paid) * it.unit_cost)}
                           </div>
                         );
                       }) : <div className="mini">No products logged.</div>}
@@ -377,6 +380,11 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
             <div className="field"><label>Delivered orders</label><input type="number" value={delivered} onChange={e => setDelivered(e.target.value)} /></div>
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
           </div>
+          <div className="newweek-grid">
+            <div className="field"><label>Revenue - COD (real $ from paper)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
+            <div className="field"><label>Revenue - Paid (real $ from Shopify)</label><input type="number" step="0.01" value={revenuePaid} onChange={e => setRevenuePaid(e.target.value)} /></div>
+          </div>
+          <div className="note" style={{ marginBottom: 10 }}>Type the actual dollar totals here - already includes any discounts. The product grid below only sets Capital, not revenue.</div>
           <input className="search" placeholder="Search a product..." value={filter} onChange={e => setFilter(e.target.value)} />
           <div className="qtyhead"><div>Product</div><div>COD</div><div>Paid</div><div>Capital</div></div>
           <div className="qtygrid">
@@ -393,12 +401,12 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
               );
             })}
           </div>
-          <div className="livebar"><span>Revenue: <b>{money(live.revenue)}</b></span><span>Capital: <b>{money(live.capital)}</b></span></div>
+          <div className="livebar"><span>Revenue: <b>{money((Number(revenueCod) || 0) + (Number(revenuePaid) || 0))}</b></span><span>Capital: <b>{money(liveCapital)}</b></span></div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : 'Save week'}</button>
             <button className="btn ghost2" onClick={() => setAdding(false)}>Cancel</button>
           </div>
-          <div className="note">COD = delivered via Topspeed, charged the delivery fee. Paid = already paid online (Whish/manual), no delivery fee, goes straight to cash and capital.</div>
+          <div className="note">COD = delivered via Topspeed, charged the delivery fee. Paid = already paid online (Whish/manual), no delivery fee.</div>
         </div>
       )}
     </div>
