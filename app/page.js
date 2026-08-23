@@ -197,12 +197,35 @@ export default function Home() {
 function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDate, weeksCount }) {
   const diff = (Number(settings.bank) || 0) - c.cashOnHand;
   const diffOk = Math.abs(diff) < 1;
+
+  function setPreset(days) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+    setFromDate(start.toISOString().slice(0, 10));
+    setToDate(end.toISOString().slice(0, 10));
+  }
+  function setLastWeek() {
+    const end = new Date();
+    end.setDate(end.getDate() - 7);
+    const start = new Date();
+    start.setDate(end.getDate() - 6);
+    setFromDate(start.toISOString().slice(0, 10));
+    setToDate(end.toISOString().slice(0, 10));
+  }
+  function setAllTime() {
+    setFromDate('2020-01-01');
+    setToDate(todayStr());
+  }
+
   return (
     <>
-      <div className="daterange">
+      <div className="daterange" style={{ flexWrap: 'wrap' }}>
         <div className="field"><label>From</label><input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} /></div>
         <div className="field"><label>To</label><input type="date" value={toDate} onChange={e => setToDate(e.target.value)} /></div>
-        <div className="mini" style={{ paddingBottom: 9 }}>Legacy batch and settings totals always included</div>
+        <button className="btn ghost2" onClick={() => setPreset(7)}>This week</button>
+        <button className="btn ghost2" onClick={setLastWeek}>Last week</button>
+        <button className="btn ghost2" onClick={setAllTime}>All time</button>
       </div>
       <div className="kpis">
         <div className="kpi accent"><div className="lbl">Cash In</div><div className="val">{money(c.cashIn)}</div></div>
@@ -371,7 +394,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
         <div className="week-detail" style={{ borderTop: '2px solid var(--gold)', marginTop: 16, paddingTop: 16 }}>
           <div className="newweek-grid">
             <div className="field"><label>Week label</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="19 Aug paper" /></div>
-            <div className="field"><label>Paper date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+            <div className="field"><label>Paper date - the Dashboard filters by THIS</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
             <div className="field"><label>Delivered orders</label><input type="number" value={delivered} onChange={e => setDelivered(e.target.value)} /></div>
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
           </div>
