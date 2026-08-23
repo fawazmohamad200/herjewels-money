@@ -269,6 +269,7 @@ function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDa
 function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   const [expanded, setExpanded] = useState({});
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [label, setLabel] = useState('');
   const [date, setDate] = useState(todayStr());
   const [delivered, setDelivered] = useState('');
@@ -295,20 +296,48 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   }, [qty, products]);
 
   function startAdd() {
-    setAdding(true); setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
+    setAdding(true); setEditingId(null);
+    setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
     setRevenueCod(''); setRevenuePaid(''); setPaidOrders(''); setFilter(''); setQty({});
+  }
+
+  function startEditWeek(w) {
+    setAdding(true); setEditingId(w.id);
+    setLabel(w.label); setDate(w.week_date);
+    setDelivered(String(w.delivered ?? '')); setCancelled(String(w.cancelled ?? ''));
+    setRevenueCod(String(w.revenue_cod ?? '')); setRevenuePaid(String(w.revenue_paid ?? ''));
+    setPaidOrders(String(w.paid_orders ?? ''));
+    setFilter('');
+    const q = {};
+    (w.items || []).forEach(it => {
+      q[it.product_id] = { cod: it.qty_cod || '', paid: it.qty_paid || '' };
+    });
+    setQty(q);
+    setExpanded(e => ({ ...e, [w.id]: false }));
   }
 
   async function saveWeek() {
     setSaving(true);
     try {
-      const { data: weekRow, error: werr } = await supabase.from('weeks').insert({
+      const payload = {
         label: label || `Week ${date}`, week_date: date,
         delivered: Number(delivered) || 0, cancelled: Number(cancelled) || 0,
         revenue_cod: Number(revenueCod) || 0, revenue_paid: Number(revenuePaid) || 0,
         paid_orders: Number(paidOrders) || 0,
-      }).select().single();
-      if (werr) throw werr;
+      };
+
+      let weekId = editingId;
+      if (editingId) {
+        const { error: uerr } = await supabase.from('weeks').update(payload).eq('id', editingId);
+        if (uerr) throw uerr;
+        // clear old items, we'll re-insert the current set
+        const { error: derr } = await supabase.from('week_items').delete().eq('week_id', editingId);
+        if (derr) throw derr;
+      } else {
+        const { data: weekRow, error: werr } = await supabase.from('weeks').insert(payload).select().single();
+        if (werr) throw werr;
+        weekId = weekRow.id;
+      }
 
       const itemsToInsert = [];
       products.forEach(p => {
@@ -316,7 +345,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
         const cod = Number(q.cod) || 0, paid = Number(q.paid) || 0;
         if (cod > 0 || paid > 0) {
           itemsToInsert.push({
-            week_id: weekRow.id, product_id: p.id,
+            week_id: weekId, product_id: p.id,
             qty_cod: cod, qty_paid: paid,
             unit_price: p.price, unit_cost: p.cost,
           });
@@ -326,7 +355,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
         const { error: ierr } = await supabase.from('week_items').insert(itemsToInsert);
         if (ierr) throw ierr;
       }
-      setAdding(false);
+      setAdding(false); setEditingId(null);
       await reload();
     } catch (err) {
       alert('Could not save: ' + (err.message || JSON.stringify(err)));
@@ -371,7 +400,10 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
                   </td>
                   <td>{w.delivered}</td><td>{w.cancelled}</td>
                   <td>{money(t.revenue)}</td><td>{money(t.cash)}</td><td>{money(t.capital)}</td><td>{money(t.packaging)}</td>
-                  <td><button className="del" onClick={() => deleteWeek(w.id)}>✕</button></td>
+                  <td>
+                    <button className="expand" onClick={() => startEditWeek(w)}>Edit</button>
+                    <button className="del" onClick={() => deleteWeek(w.id)}>✕</button>
+                  </td>
                 </tr>
                 {isOpen && (
                   <tr><td colSpan={8}>
@@ -429,8 +461,8 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
           </div>
           <div className="livebar"><span>Revenue: <b>{money((Number(revenueCod) || 0) + (Number(revenuePaid) || 0))}</b></span><span>Capital: <b>{money(liveCapital)}</b></span></div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : 'Save week'}</button>
-            <button className="btn ghost2" onClick={() => setAdding(false)}>Cancel</button>
+            <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update week' : 'Save week'}</button>
+            <button className="btn ghost2" onClick={() => { setAdding(false); setEditingId(null); }}>Cancel</button>
           </div>
           <div className="note">COD = delivered via Topspeed, charged the delivery fee. Paid = already paid online (Whish/manual), no delivery fee.</div>
         </div>
