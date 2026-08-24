@@ -189,8 +189,8 @@ export default function Home() {
         {loading ? <div className="loading">Loading...</div> : (
           <>
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} fromDate={fromDate} toDate={toDate} setFromDate={setFromDate} setToDate={setToDate} weeksCount={weeks.length} />}
-            {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} weekTotals={weekTotals} reload={loadAll} />}
-            {tab === 'prepaid' && <Prepaid weeks={weeks} products={products} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'prepaid' && <Prepaid weeks={weeks} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'performance' && <Performance orders={orders} ads={ads} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
@@ -272,7 +272,7 @@ function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDa
   );
 }
 
-function Weeks({ weeks, legacy, products, weekTotals, reload }) {
+function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
   const topspeedWeeks = weeks.filter(w => (w.kind || 'topspeed') === 'topspeed');
   const [expanded, setExpanded] = useState({});
   const [adding, setAdding] = useState(false);
@@ -372,6 +372,9 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
       q[it.product_id] = { cod: it.qty_cod || '', paid: it.qty_paid || '' };
     });
     setQty(q);
+    const savedOrders = orders.filter(o => o.week_id === w.id);
+    setTrackingText(savedOrders.map(o => o.tracking_number).filter(Boolean).join('\n'));
+    setLookupResult(null); setMatchedOrders([]); // re-run "Look up" to refresh order records if you change anything
     setExpanded(e => ({ ...e, [w.id]: false }));
   }
 
@@ -414,8 +417,10 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
         if (ierr) throw ierr;
       }
 
-      await supabase.from('orders').delete().eq('week_id', weekId);
+      // Only touch saved order records if a fresh lookup ran this session -
+      // editing other fields (like Delivered count) must never wipe them out.
       if (matchedOrders.length) {
+        await supabase.from('orders').delete().eq('week_id', weekId);
         const orderRows = matchedOrders.map(o => {
           let capital = 0;
           o.lineItems.forEach(li => {
@@ -494,6 +499,9 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
                           </div>
                         );
                       }) : <div className="mini">No products logged.</div>}
+                      <div className="mini" style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--line)'}}>
+                        Tracking numbers: {orders.filter(o => o.week_id === w.id).map(o => o.tracking_number).filter(Boolean).join(', ') || 'none saved'}
+                      </div>
                     </div>
                   </td></tr>
                 )}
@@ -577,7 +585,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   );
 }
 
-function Prepaid({ weeks, products, weekTotals, reload }) {
+function Prepaid({ weeks, products, orders, weekTotals, reload }) {
   const prepaidWeeks = weeks.filter(w => w.kind === 'prepaid');
   const [expanded, setExpanded] = useState({});
   const [adding, setAdding] = useState(false);
@@ -668,7 +676,9 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
     const q = {};
     (w.items || []).forEach(it => { q[it.product_id] = { paid: it.qty_paid || '' }; });
     setQty(q);
-    setTrackingText(''); setLookupResult(null); setMatchedOrders([]);
+    const savedOrders = orders.filter(o => o.week_id === w.id);
+    setTrackingText(savedOrders.map(o => o.tracking_number).filter(Boolean).join('\n'));
+    setLookupResult(null); setMatchedOrders([]);
     setExpanded(e => ({ ...e, [w.id]: false }));
   }
 
@@ -707,8 +717,8 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
         if (ierr) throw ierr;
       }
 
-      await supabase.from('orders').delete().eq('week_id', weekId);
       if (matchedOrders.length) {
+        await supabase.from('orders').delete().eq('week_id', weekId);
         const orderRows = matchedOrders.map(o => {
           let capital = 0;
           o.lineItems.forEach(li => {
@@ -777,6 +787,9 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
                           </div>
                         );
                       }) : <div className="mini">No products logged.</div>}
+                      <div className="mini" style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--line)'}}>
+                        Tracking numbers: {orders.filter(o => o.week_id === w.id).map(o => o.tracking_number).filter(Boolean).join(', ') || 'none saved'}
+                      </div>
                     </div>
                   </td></tr>
                 )}
