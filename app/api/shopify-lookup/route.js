@@ -63,7 +63,7 @@ export async function POST(request) {
         const hit = trackNums.find(t => wanted.has(t));
         if (hit) {
           const gateways = (o.payment_gateway_names || []).join(',').toLowerCase();
-          const isPrepaid = gateways.includes('whish') || gateways.includes('manual');
+          const isPrepaid = gateways.includes('whish');
           matched.push({
             name: o.name,
             trackingNumber: hit,
