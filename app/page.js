@@ -27,6 +27,7 @@ export default function Home() {
   const [weeks, setWeeks] = useState([]); // each: {...week, items:[{product_id, qty_cod, qty_paid, unit_price, unit_cost}]}
   const [legacy, setLegacy] = useState([]);
   const [ads, setAds] = useState([]);
+  const [orders, setOrders] = useState([]); // individual real orders, for the Performance report
   const [settings, setSettings] = useState({ employee: 0, stock: 0, other: 0, bank: 0 });
 
   const [fromDate, setFromDate] = useState('2026-01-01');
@@ -41,7 +42,8 @@ export default function Home() {
     setDbError('');
     try {
       const [{ data: prod, error: e1 }, { data: wk, error: e2 }, { data: items, error: e3 },
-             { data: lg, error: e4 }, { data: adRows, error: e5 }, { data: st, error: e6 }] =
+             { data: lg, error: e4 }, { data: adRows, error: e5 }, { data: st, error: e6 },
+             { data: ordRows, error: e7 }] =
         await Promise.all([
           supabase.from('products').select('*').order('name'),
           supabase.from('weeks').select('*').order('week_date', { ascending: false }),
@@ -49,8 +51,9 @@ export default function Home() {
           supabase.from('legacy_batches').select('*'),
           supabase.from('ads').select('*').order('ad_date', { ascending: false }),
           supabase.from('settings').select('*').eq('id', 1).single(),
+          supabase.from('orders').select('*').order('placed_at', { ascending: false }),
         ]);
-      if (e1 || e2 || e3 || e4 || e5 || e6) throw (e1 || e2 || e3 || e4 || e5 || e6);
+      if (e1 || e2 || e3 || e4 || e5 || e6 || e7) throw (e1 || e2 || e3 || e4 || e5 || e6 || e7);
 
       const weeksWithItems = (wk || []).map(w => ({
         ...w,
@@ -61,6 +64,7 @@ export default function Home() {
       setWeeks(weeksWithItems);
       setLegacy(lg || []);
       setAds(adRows || []);
+      setOrders(ordRows || []);
       setSettings(st || { employee: 0, stock: 0, other: 0, bank: 0 });
 
       // default date range: earliest known date to today
@@ -109,6 +113,11 @@ export default function Home() {
     if (!dateStr) return true;
     return dateStr >= fromDate && dateStr <= toDate;
   };
+  const rangeOverlaps = (start, end) => {
+    const s = start || end, e = end || start;
+    if (!s) return true;
+    return s <= toDate && e >= fromDate;
+  };
 
   const totals = useMemo(() => {
     let topspeedCash = 0, capitalTotal = 0, packagingTotal = 0, deliveredTotal = 0, cancelledTotal = 0, revenueTotal = 0;
@@ -130,7 +139,7 @@ export default function Home() {
       revenueTotal += Number(b.revenue) || 0;
     });
     let adsTotal = 0;
-    ads.forEach(a => { if (inRange(a.ad_date)) adsTotal += Number(a.amount) || 0; });
+    ads.forEach(a => { if (rangeOverlaps(a.ad_date, a.ad_date_to)) adsTotal += Number(a.amount) || 0; });
     legacy.forEach(b => { adsTotal += Number(b.ads) || 0; });
 
     const cashIn = topspeedCash;
@@ -174,7 +183,7 @@ export default function Home() {
           <div><h1>HerJewels</h1><span>Money & Capital Tracker</span></div>
         </div>
         <div className="tabs">
-          {['dashboard', 'weeks', 'prepaid', 'products', 'ads', 'settings'].map(t => (
+          {['dashboard', 'weeks', 'prepaid', 'performance', 'products', 'ads', 'settings'].map(t => (
             <div key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
             </div>
@@ -187,6 +196,7 @@ export default function Home() {
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} fromDate={fromDate} toDate={toDate} setFromDate={setFromDate} setToDate={setToDate} weeksCount={weeks.length} />}
             {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'prepaid' && <Prepaid weeks={weeks} products={products} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'performance' && <Performance orders={orders} ads={ads} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
             {tab === 'settings' && <Settings settings={settings} reload={loadAll} />}
@@ -285,6 +295,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   const [trackingText, setTrackingText] = useState('');
   const [looking, setLooking] = useState(false);
   const [lookupResult, setLookupResult] = useState(null); // {matchedCount, notFound, unmatchedProducts}
+  const [matchedOrders, setMatchedOrders] = useState([]); // raw orders from last lookup, for saving into `orders` table
 
   function matchProduct(title, variant) {
     const t = (title || '').trim().toLowerCase();
@@ -321,6 +332,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
         });
       });
       setQty(newQty);
+      setMatchedOrders(data.matched);
       setLookupResult({
         matchedCount: data.matched.length,
         notFound: data.notFound,
@@ -350,7 +362,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
     setAdding(true); setEditingId(null);
     setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
     setRevenueCod(''); setRevenuePaid(''); setPaidOrders(''); setFilter(''); setQty({});
-    setTrackingText(''); setLookupResult(null);
+    setTrackingText(''); setLookupResult(null); setMatchedOrders([]);
   }
 
   function startEditWeek(w) {
@@ -406,6 +418,25 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
         const { error: ierr } = await supabase.from('week_items').insert(itemsToInsert);
         if (ierr) throw ierr;
       }
+
+      await supabase.from('orders').delete().eq('week_id', weekId);
+      if (matchedOrders.length) {
+        const orderRows = matchedOrders.map(o => {
+          let capital = 0;
+          o.lineItems.forEach(li => {
+            const p = matchProduct(li.title, li.variant);
+            if (p) capital += li.quantity * p.cost;
+          });
+          return {
+            order_name: o.name, tracking_number: o.trackingNumber,
+            placed_at: (o.createdAt || '').slice(0, 10) || date,
+            total: o.total, capital, kind: 'topspeed', week_id: weekId,
+          };
+        });
+        const { error: oerr } = await supabase.from('orders').insert(orderRows);
+        if (oerr) throw oerr;
+      }
+
       setAdding(false); setEditingId(null);
       await reload();
     } catch (err) {
@@ -544,7 +575,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
             <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update week' : 'Save week'}</button>
             <button className="btn ghost2" onClick={() => { setAdding(false); setEditingId(null); }}>Cancel</button>
           </div>
-          <div className="note">COD = delivered via Topspeed, charged the delivery fee. Paid = already paid online (Whish/manual), no delivery fee.</div>
+          <div className="note">COD = delivered via Topspeed, charged the delivery fee. Prepaid orders are tracked in the Prepaid tab.</div>
         </div>
       )}
     </div>
@@ -564,6 +595,7 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
   const [trackingText, setTrackingText] = useState('');
   const [looking, setLooking] = useState(false);
   const [lookupResult, setLookupResult] = useState(null);
+  const [matchedOrders, setMatchedOrders] = useState([]);
 
   const filtered = products.filter(p =>
     !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
@@ -614,6 +646,7 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
         });
       });
       setQty(newQty);
+      setMatchedOrders(data.matched);
       const revenueSum = data.matched.reduce((s, o) => s + o.total, 0);
       setLookupResult({
         matchedCount: data.matched.length,
@@ -630,7 +663,7 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
   function startAdd() {
     setAdding(true); setEditingId(null);
     setLabel(''); setDate(todayStr()); setFilter(''); setQty({});
-    setTrackingText(''); setLookupResult(null);
+    setTrackingText(''); setLookupResult(null); setMatchedOrders([]);
   }
 
   function startEditWeek(w) {
@@ -640,7 +673,7 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
     const q = {};
     (w.items || []).forEach(it => { q[it.product_id] = { paid: it.qty_paid || '' }; });
     setQty(q);
-    setTrackingText(''); setLookupResult(null);
+    setTrackingText(''); setLookupResult(null); setMatchedOrders([]);
     setExpanded(e => ({ ...e, [w.id]: false }));
   }
 
@@ -678,6 +711,25 @@ function Prepaid({ weeks, products, weekTotals, reload }) {
         const { error: ierr } = await supabase.from('week_items').insert(itemsToInsert);
         if (ierr) throw ierr;
       }
+
+      await supabase.from('orders').delete().eq('week_id', weekId);
+      if (matchedOrders.length) {
+        const orderRows = matchedOrders.map(o => {
+          let capital = 0;
+          o.lineItems.forEach(li => {
+            const p = matchProduct(li.title, li.variant);
+            if (p) capital += li.quantity * p.cost;
+          });
+          return {
+            order_name: o.name, tracking_number: o.trackingNumber,
+            placed_at: (o.createdAt || '').slice(0, 10) || date,
+            total: o.total, capital, kind: 'prepaid', week_id: weekId,
+          };
+        });
+        const { error: oerr } = await supabase.from('orders').insert(orderRows);
+        if (oerr) throw oerr;
+      }
+
       setAdding(false); setEditingId(null);
       await reload();
     } catch (err) {
@@ -885,11 +937,17 @@ function Products({ products, reload }) {
 function Ads({ ads, legacy, reload }) {
   const [label, setLabel] = useState('');
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(todayStr());
+  const [platform, setPlatform] = useState('Meta');
+  const [dateFrom, setDateFrom] = useState(todayStr());
+  const [dateTo, setDateTo] = useState(todayStr());
 
   async function addAd() {
-    if (!label || !amount) return;
-    const { error } = await supabase.from('ads').insert({ label, amount: Number(amount), ad_date: date });
+    if (!amount) return;
+    const finalLabel = label || `${platform}, ${dateFrom} to ${dateTo}`;
+    const { error } = await supabase.from('ads').insert({
+      label: finalLabel, amount: Number(amount), platform,
+      ad_date: dateFrom, ad_date_to: dateTo,
+    });
     if (error) { alert('Could not add: ' + error.message); return; }
     setLabel(''); setAmount('');
     await reload();
@@ -901,27 +959,108 @@ function Ads({ ads, legacy, reload }) {
 
   return (
     <div className="panel">
-      <h2>Ads <small>log spend on whatever schedule you check Meta/TikTok</small></h2>
+      <h2>Ads <small>log spend per platform, for whatever date range you're looking at</small></h2>
       <table className="tbl">
-        <thead><tr><th>Period</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th>Period</th><th>Platform</th><th>Amount</th><th></th></tr></thead>
         <tbody>
           {legacy.filter(b => b.ads).map(b => (
-            <tr key={'lg' + b.id} style={{ opacity: .65 }}><td>{b.label} <span className="mini">(legacy)</span></td><td>{money(b.ads)}</td><td></td></tr>
+            <tr key={'lg' + b.id} style={{ opacity: .65 }}><td>{b.label} <span className="mini">(legacy)</span></td><td>-</td><td>{money(b.ads)}</td><td></td></tr>
           ))}
           {ads.map(a => (
-            <tr key={a.id}><td>{a.label} <span className="mini">({a.ad_date})</span></td><td>{money(a.amount)}</td>
-              <td><button className="del" onClick={() => deleteAd(a.id)}>✕</button></td></tr>
+            <tr key={a.id}>
+              <td>{a.label} <span className="mini">({a.ad_date}{a.ad_date_to && a.ad_date_to !== a.ad_date ? ` to ${a.ad_date_to}` : ''})</span></td>
+              <td>{a.platform}</td><td>{money(a.amount)}</td>
+              <td><button className="del" onClick={() => deleteAd(a.id)}>✕</button></td>
+            </tr>
           ))}
         </tbody>
       </table>
-      <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '2fr 1fr 1fr auto' }}>
-        <div className="field"><label>Period label</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="8-18 Aug, Meta + TikTok" /></div>
-        <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+      <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr 1fr 1fr auto' }}>
+        <div className="field">
+          <label>Platform</label>
+          <select value={platform} onChange={e => setPlatform(e.target.value)} style={{width:'100%',padding:'8px 9px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,background:'#fbfaf6'}}>
+            <option>Meta</option><option>TikTok</option><option>Other</option>
+          </select>
+        </div>
+        <div className="field"><label>From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
+        <div className="field"><label>To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
         <div className="field"><label>Amount $</label><input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} /></div>
         <button className="btn gold" onClick={addAd}>Add</button>
       </div>
-      <div className="note">This total feeds Cash Out on the Dashboard, filtered by the same date range.</div>
+      <div className="note">Add one entry per platform - so for the same week you'll add a Meta row, then a TikTok row. Both feed Cash Out and the Performance report.</div>
     </div>
+  );
+}
+
+function Performance({ orders, ads }) {
+  const earliest = orders.length ? orders.map(o => o.placed_at).reduce((a, b) => (a < b ? a : b)) : todayStr();
+  const [from, setFrom] = useState(earliest);
+  const [to, setTo] = useState(todayStr());
+
+  function overlaps(start, end) {
+    const s = start || end, e = end || start;
+    if (!s) return true;
+    return s <= to && e >= from;
+  }
+
+  const filteredOrders = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
+  const revenue = filteredOrders.reduce((s, o) => s + Number(o.total), 0);
+  const capital = filteredOrders.reduce((s, o) => s + Number(o.capital), 0);
+  const packaging = filteredOrders.length * 1;
+
+  const filteredAds = ads.filter(a => overlaps(a.ad_date, a.ad_date_to));
+  const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
+  const byPlatform = {};
+  filteredAds.forEach(a => { byPlatform[a.platform] = (byPlatform[a.platform] || 0) + Number(a.amount); });
+
+  const profit = revenue - capital - packaging - adSpend;
+  const codCount = filteredOrders.filter(o => o.kind === 'topspeed').length;
+  const prepaidCount = filteredOrders.filter(o => o.kind === 'prepaid').length;
+
+  return (
+    <>
+      <div className="daterange">
+        <div className="field"><label>Orders placed from</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
+        <div className="field"><label>to</label><input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
+        <div className="mini" style={{ paddingBottom: 9 }}>Filters by the date each order was PLACED, not when Topspeed paid for it</div>
+      </div>
+
+      <div className="kpis">
+        <div className="kpi accent"><div className="lbl">Revenue</div><div className="val">{money(revenue)}</div></div>
+        <div className="kpi warn"><div className="lbl">Ad spend</div><div className="val">{money(adSpend)}</div></div>
+        <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(capital + packaging)}</div></div>
+        <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit</div><div className="val">{money(profit)}</div></div>
+      </div>
+
+      <div className="panel">
+        <h2>Orders placed in this window <small>{filteredOrders.length} orders - {codCount} via Topspeed, {prepaidCount} prepaid</small></h2>
+        <table className="tbl">
+          <tbody>
+            <tr><td>Revenue (real, already collected)</td><td>{money(revenue)}</td></tr>
+            <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
+            <tr><td>Packaging ({filteredOrders.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
+            <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
+            <tr><td><b>PROFIT</b></td><td><b>{money(profit)}</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel">
+        <h2>Ad spend by platform, this window</h2>
+        <table className="tbl">
+          <tbody>
+            {Object.keys(byPlatform).length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
+            {Object.entries(byPlatform).map(([p, amt]) => (
+              <tr key={p}><td>{p}</td><td>{money(amt)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="note" style={{ marginBottom: 8 }}>
+        Only orders already looked up in Weeks or Prepaid appear here - meaning revenue shown is real, collected money, not a guess about pending orders.
+      </div>
+    </>
   );
 }
 
