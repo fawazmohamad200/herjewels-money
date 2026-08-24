@@ -1013,6 +1013,11 @@ function Performance({ orders, ads }) {
   const earliest = orders.length ? orders.map(o => o.placed_at).reduce((a, b) => (a < b ? a : b)) : todayStr();
   const [from, setFrom] = useState(earliest);
   const [to, setTo] = useState(todayStr());
+  const [view, setView] = useState('collected'); // 'collected' | 'all'
+  const [adsExpanded, setAdsExpanded] = useState(false);
+  const [allOrders, setAllOrders] = useState(null);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [allErr, setAllErr] = useState('');
 
   const filteredAds = ads.filter(a => a.ad_date >= from && a.ad_date <= to);
   const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
@@ -1028,52 +1033,129 @@ function Performance({ orders, ads }) {
   const codCount = filteredOrders.filter(o => o.kind === 'topspeed').length;
   const prepaidCount = filteredOrders.filter(o => o.kind === 'prepaid').length;
 
+  async function loadAllOrders() {
+    setLoadingAll(true); setAllErr(''); setAllOrders(null);
+    try {
+      const res = await fetch('/api/shopify-orders-range', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromDate: from, toDate: to }),
+      });
+      const data = await res.json();
+      if (data.error) { setAllErr(data.error); setLoadingAll(false); return; }
+      const loggedNames = new Set(orders.map(o => o.order_name));
+      const classified = data.orders.map(o => ({
+        ...o,
+        status: loggedNames.has(o.name)
+          ? (orders.find(x => x.order_name === o.name)?.kind === 'prepaid' ? 'Collected - Prepaid' : 'Collected - Topspeed')
+          : 'Pending',
+      }));
+      setAllOrders(classified);
+    } catch (err) {
+      setAllErr(err.message);
+    }
+    setLoadingAll(false);
+  }
+
+  function switchToAll() {
+    setView('all');
+    if (!allOrders) loadAllOrders();
+  }
+
+  const pending = allOrders ? allOrders.filter(o => o.status === 'Pending') : [];
+  const pendingRevenue = pending.reduce((s, o) => s + o.total, 0);
+  const allTotal = allOrders ? allOrders.reduce((s, o) => s + o.total, 0) : 0;
+
   return (
     <>
       <div className="daterange">
-        <div className="field"><label>Orders placed from</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
-        <div className="field"><label>to</label><input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
-        <div className="mini" style={{ paddingBottom: 9 }}>Filters by the date each order was PLACED, not when Topspeed paid for it</div>
+        <div className="field"><label>Orders placed from</label><input type="date" value={from} onChange={e => { setFrom(e.target.value); setAllOrders(null); }} style={{ border: '2px solid var(--gold)' }} /></div>
+        <div className="field"><label>to</label><input type="date" value={to} onChange={e => { setTo(e.target.value); setAllOrders(null); }} style={{ border: '2px solid var(--gold)' }} /></div>
+        <button className={`btn ${view === 'collected' ? 'gold' : 'ghost2'}`} onClick={() => setView('collected')}>Collected only</button>
+        <button className={`btn ${view === 'all' ? 'gold' : 'ghost2'}`} onClick={switchToAll}>All orders (incl. pending)</button>
       </div>
 
-      <div className="kpis">
-        <div className="kpi accent"><div className="lbl">Revenue</div><div className="val">{money(revenue)}</div></div>
-        <div className="kpi warn"><div className="lbl">Ad spend</div><div className="val">{money(adSpend)}</div></div>
-        <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(capital + packaging)}</div></div>
-        <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit</div><div className="val">{money(profit)}</div></div>
-      </div>
+      {view === 'collected' && (
+        <>
+          <div className="mini" style={{ marginTop: -10, marginBottom: 14 }}>Filters by the date each order was PLACED, not when Topspeed paid for it</div>
+          <div className="kpis">
+            <div className="kpi accent"><div className="lbl">Revenue</div><div className="val">{money(revenue)}</div></div>
+            <div className="kpi warn"><div className="lbl">Ad spend</div><div className="val">{money(adSpend)}</div></div>
+            <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(capital + packaging)}</div></div>
+            <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit</div><div className="val">{money(profit)}</div></div>
+          </div>
 
-      <div className="panel">
-        <h2>Orders placed in this window <small>{filteredOrders.length} orders - {codCount} via Topspeed, {prepaidCount} prepaid</small></h2>
-        <table className="tbl">
-          <tbody>
-            <tr><td>Gross order value</td><td>{money(grossRevenue)}</td></tr>
-            <tr><td>Topspeed delivery fees</td><td className="neg">-{money(fees)}</td></tr>
-            <tr><td><b>Net revenue (cash collected)</b></td><td><b>{money(revenue)}</b></td></tr>
-            <tr><td>&nbsp;</td><td></td></tr>
-            <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
-            <tr><td>Packaging ({filteredOrders.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
-            <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
-            <tr><td><b>PROFIT</b></td><td><b>{money(profit)}</b></td></tr>
-          </tbody>
-        </table>
-      </div>
+          <div className="panel">
+            <h2>Orders placed in this window <small>{filteredOrders.length} orders - {codCount} via Topspeed, {prepaidCount} prepaid</small></h2>
+            <table className="tbl">
+              <tbody>
+                <tr><td>Gross order value</td><td>{money(grossRevenue)}</td></tr>
+                <tr><td>Topspeed delivery fees</td><td className="neg">-{money(fees)}</td></tr>
+                <tr><td><b>Net revenue (cash collected)</b></td><td><b>{money(revenue)}</b></td></tr>
+                <tr><td>&nbsp;</td><td></td></tr>
+                <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
+                <tr><td>Packaging ({filteredOrders.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
+                <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
+                <tr><td><b>PROFIT</b></td><td><b>{money(profit)}</b></td></tr>
+              </tbody>
+            </table>
+          </div>
 
-      <div className="panel">
-        <h2>Ad spend by day, this window</h2>
-        <table className="tbl">
-          <tbody>
-            {filteredAds.length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
-            {filteredAds.map(a => (
-              <tr key={a.id}><td>{a.ad_date} <span className="mini">({a.label})</span></td><td>{money(a.amount)}</td></tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          <div className="panel">
+            <h2>Ad spend, this window <small>{filteredAds.length} days logged</small></h2>
+            {!adsExpanded ? (
+              <button className="btn ghost2" onClick={() => setAdsExpanded(true)}>Show all {filteredAds.length} days - {money(adSpend)} total</button>
+            ) : (
+              <>
+                <table className="tbl">
+                  <tbody>
+                    {filteredAds.length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
+                    {filteredAds.map(a => (
+                      <tr key={a.id}><td>{a.ad_date} <span className="mini">({a.label})</span></td><td>{money(a.amount)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button className="btn ghost2" style={{ marginTop: 10 }} onClick={() => setAdsExpanded(false)}>Hide</button>
+              </>
+            )}
+          </div>
 
-      <div className="note" style={{ marginBottom: 8 }}>
-        Only orders already looked up in Weeks or Prepaid appear here - meaning revenue shown is real, collected money, not a guess about pending orders.
-      </div>
+          <div className="note" style={{ marginBottom: 8 }}>
+            Only orders already looked up in Weeks or Prepaid appear here - meaning revenue shown is real, collected money, not a guess about pending orders.
+          </div>
+        </>
+      )}
+
+      {view === 'all' && (
+        <>
+          <div className="mini" style={{ marginTop: -10, marginBottom: 14 }}>Every real Shopify order placed in this window, whether logged in the app yet or not</div>
+          {loadingAll && <div className="loading">Checking Shopify...</div>}
+          {allErr && <div className="flag">{allErr}</div>}
+          {allOrders && (
+            <>
+              <div className="kpis">
+                <div className="kpi accent"><div className="lbl">All orders</div><div className="val">{allOrders.length}</div></div>
+                <div className="kpi warn"><div className="lbl">Pending (not yet logged)</div><div className="val">{pending.length}</div></div>
+                <div className="kpi warn"><div className="lbl">Pending value</div><div className="val">{money(pendingRevenue)}</div></div>
+                <div className="kpi good"><div className="lbl">Total order value</div><div className="val">{money(allTotal)}</div></div>
+              </div>
+              <div className="panel">
+                <h2>Orders <small>sorted so Pending shows first</small></h2>
+                <table className="tbl">
+                  <thead><tr><th>Order</th><th>Placed</th><th>Total</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {[...allOrders].sort((a, b) => (a.status === 'Pending' ? -1 : 1) - (b.status === 'Pending' ? -1 : 1)).map(o => (
+                      <tr key={o.name}>
+                        <td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.total)}</td>
+                        <td style={{ color: o.status === 'Pending' ? 'var(--bad)' : 'var(--good)', fontWeight: 700 }}>{o.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </>
   );
 }
