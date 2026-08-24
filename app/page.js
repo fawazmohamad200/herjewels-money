@@ -280,6 +280,59 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   const [filter, setFilter] = useState('');
   const [qty, setQty] = useState({}); // productId -> {cod, paid}
   const [saving, setSaving] = useState(false);
+  const [trackingText, setTrackingText] = useState('');
+  const [looking, setLooking] = useState(false);
+  const [lookupResult, setLookupResult] = useState(null); // {matchedCount, notFound, unmatchedProducts}
+
+  function matchProduct(title, variant) {
+    const t = (title || '').trim().toLowerCase();
+    const v = (variant || '').trim().toLowerCase();
+    let hit = products.find(p => p.name.trim().toLowerCase() === t && (p.variant || '').trim().toLowerCase() === v);
+    if (hit) return hit;
+    hit = products.find(p => p.name.trim().toLowerCase() === t);
+    if (hit) return hit;
+    hit = products.find(p => t.includes(p.name.trim().toLowerCase()) || p.name.trim().toLowerCase().includes(t));
+    return hit || null;
+  }
+
+  async function lookupTracking() {
+    const list = trackingText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (!list.length) return;
+    setLooking(true);
+    setLookupResult(null);
+    try {
+      const res = await fetch('/api/shopify-lookup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackingNumbers: list }),
+      });
+      const data = await res.json();
+      if (data.error) { alert('Lookup failed: ' + data.error); setLooking(false); return; }
+
+      const newQty = { ...qty };
+      let paidCount = 0, paidRevenue = 0, unmatchedProducts = new Set();
+      data.matched.forEach(order => {
+        if (order.isPrepaid) { paidCount++; paidRevenue += order.total; }
+        order.lineItems.forEach(li => {
+          const p = matchProduct(li.title, li.variant);
+          if (!p) { unmatchedProducts.add(li.title + (li.variant ? ' - ' + li.variant : '')); return; }
+          const key = order.isPrepaid ? 'paid' : 'cod';
+          const existing = newQty[p.id] || {};
+          newQty[p.id] = { ...existing, [key]: (Number(existing[key]) || 0) + li.quantity };
+        });
+      });
+      setQty(newQty);
+      setPaidOrders(String(paidCount));
+      setRevenuePaid(paidRevenue.toFixed(2));
+      setLookupResult({
+        matchedCount: data.matched.length,
+        notFound: data.notFound,
+        unmatchedProducts: [...unmatchedProducts],
+      });
+    } catch (err) {
+      alert('Lookup failed: ' + err.message);
+    }
+    setLooking(false);
+  }
 
   const filtered = products.filter(p =>
     !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
@@ -299,6 +352,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
     setAdding(true); setEditingId(null);
     setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
     setRevenueCod(''); setRevenuePaid(''); setPaidOrders(''); setFilter(''); setQty({});
+    setTrackingText(''); setLookupResult(null);
   }
 
   function startEditWeek(w) {
@@ -438,6 +492,38 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
             <div className="field"><label>Prepaid orders (Whish/manual)</label><input type="number" value={paidOrders} onChange={e => setPaidOrders(e.target.value)} /></div>
           </div>
           <div className="note" style={{marginBottom:10}}>Packaging cost is $1 per shipped order - delivered + prepaid, both need a box.</div>
+
+          <div className="week-detail" style={{ background: '#f4f0e2', marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
+              Paste every barcode from the paper (one per line or comma-separated) - looks them up in Shopify automatically
+            </label>
+            <textarea
+              value={trackingText}
+              onChange={e => setTrackingText(e.target.value)}
+              rows={3}
+              style={{ width: '100%', padding: 8, border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'IBM Plex Mono, monospace' }}
+              placeholder={'SS0033487 34\nSS0033487 33\n...'}
+            />
+            <div style={{ marginTop: 8 }}>
+              <button className="btn gold" onClick={lookupTracking} disabled={looking}>{looking ? 'Looking up...' : 'Look up in Shopify'}</button>
+            </div>
+            {lookupResult && (
+              <div className="note" style={{ marginTop: 8 }}>
+                Matched {lookupResult.matchedCount} orders. Product quantities and Paid orders/Revenue filled in below - check before saving.
+                {lookupResult.notFound.length > 0 && (
+                  <div style={{ color: 'var(--bad)', marginTop: 4 }}>
+                    Not found in Shopify ({lookupResult.notFound.length}): {lookupResult.notFound.join(', ')} - likely WhatsApp orders not entered yet, or cancelled.
+                  </div>
+                )}
+                {lookupResult.unmatchedProducts.length > 0 && (
+                  <div style={{ color: 'var(--warn)', marginTop: 4 }}>
+                    Product name not in your Products tab ({lookupResult.unmatchedProducts.length}): {lookupResult.unmatchedProducts.join(', ')} - add it there, then look up again.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="newweek-grid">
             <div className="field"><label>Revenue - COD (Topspeed's "Amount To Be Paid", already net)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
             <div className="field"><label>Revenue - Paid (real $ from Shopify)</label><input type="number" step="0.01" value={revenuePaid} onChange={e => setRevenuePaid(e.target.value)} /></div>
