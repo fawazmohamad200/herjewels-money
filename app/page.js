@@ -97,6 +97,16 @@ export default function Home() {
     }
   }, [pinInput]);
 
+  useEffect(() => {
+    if (unlocked) return; // only listen while the PIN screen is showing
+    function onKeyDown(e) {
+      if (e.key >= '0' && e.key <= '9') { handleKey(e.key); return; }
+      if (e.key === 'Backspace') { handleKey('⌫'); return; }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [unlocked]);
+
   const weekTotals = (w) => {
     let capCod = 0, capPaid = 0;
     (w.items || []).forEach(it => {
