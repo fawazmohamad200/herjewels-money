@@ -174,7 +174,7 @@ export default function Home() {
           <div><h1>HerJewels</h1><span>Money & Capital Tracker</span></div>
         </div>
         <div className="tabs">
-          {['dashboard', 'weeks', 'products', 'ads', 'settings'].map(t => (
+          {['dashboard', 'weeks', 'prepaid', 'products', 'ads', 'settings'].map(t => (
             <div key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
             </div>
@@ -186,6 +186,7 @@ export default function Home() {
           <>
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} fromDate={fromDate} toDate={toDate} setFromDate={setFromDate} setToDate={setToDate} weeksCount={weeks.length} />}
             {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'prepaid' && <Prepaid weeks={weeks} products={products} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
             {tab === 'settings' && <Settings settings={settings} reload={loadAll} />}
@@ -267,6 +268,7 @@ function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDa
 }
 
 function Weeks({ weeks, legacy, products, weekTotals, reload }) {
+  const topspeedWeeks = weeks.filter(w => (w.kind || 'topspeed') === 'topspeed');
   const [expanded, setExpanded] = useState({});
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -275,8 +277,8 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
   const [delivered, setDelivered] = useState('');
   const [cancelled, setCancelled] = useState('');
   const [revenueCod, setRevenueCod] = useState('');
-  const [revenuePaid, setRevenuePaid] = useState('');
-  const [paidOrders, setPaidOrders] = useState('');
+  const [revenuePaid, setRevenuePaid] = useState(''); // unused for topspeed weeks, kept 0
+  const [paidOrders, setPaidOrders] = useState(''); // unused for topspeed weeks, kept 0
   const [filter, setFilter] = useState('');
   const [qty, setQty] = useState({}); // productId -> {cod, paid}
   const [saving, setSaving] = useState(false);
@@ -309,20 +311,16 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
       if (data.error) { alert('Lookup failed: ' + data.error); setLooking(false); return; }
 
       const newQty = { ...qty };
-      let paidCount = 0, paidRevenue = 0, unmatchedProducts = new Set();
+      let unmatchedProducts = new Set();
       data.matched.forEach(order => {
-        if (order.isPrepaid) { paidCount++; paidRevenue += order.total; }
         order.lineItems.forEach(li => {
           const p = matchProduct(li.title, li.variant);
           if (!p) { unmatchedProducts.add(li.title + (li.variant ? ' - ' + li.variant : '')); return; }
-          const key = order.isPrepaid ? 'paid' : 'cod';
           const existing = newQty[p.id] || {};
-          newQty[p.id] = { ...existing, [key]: (Number(existing[key]) || 0) + li.quantity };
+          newQty[p.id] = { ...existing, cod: (Number(existing.cod) || 0) + li.quantity };
         });
       });
       setQty(newQty);
-      setPaidOrders(String(paidCount));
-      setRevenuePaid(paidRevenue.toFixed(2));
       setLookupResult({
         matchedCount: data.matched.length,
         notFound: data.notFound,
@@ -374,10 +372,9 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
     setSaving(true);
     try {
       const payload = {
-        label: label || `Week ${date}`, week_date: date,
+        label: label || `Week ${date}`, week_date: date, kind: 'topspeed',
         delivered: Number(delivered) || 0, cancelled: Number(cancelled) || 0,
-        revenue_cod: Number(revenueCod) || 0, revenue_paid: Number(revenuePaid) || 0,
-        paid_orders: Number(paidOrders) || 0,
+        revenue_cod: Number(revenueCod) || 0, revenue_paid: 0, paid_orders: 0,
       };
 
       let weekId = editingId;
@@ -426,7 +423,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
 
   return (
     <div className="panel">
-      <h2>Weeks <small>one row per Topspeed paper &middot; COD and already-paid quantities tracked separately per product</small></h2>
+      <h2>Weeks <small>one row per Topspeed paper - COD orders only</small></h2>
       <table className="tbl">
         <thead>
           <tr><th>Week</th><th>Delivered</th><th>Cancelled</th><th>Revenue</th><th>Cash</th><th>Capital</th><th>Packaging</th><th></th></tr>
@@ -441,10 +438,10 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
               </tr>
             );
           })}
-          {weeks.map(w => {
+          {topspeedWeeks.map(w => {
             const t = weekTotals(w);
             const isOpen = expanded[w.id];
-            const nonZero = (w.items || []).filter(it => it.qty_cod > 0 || it.qty_paid > 0);
+            const nonZero = (w.items || []).filter(it => it.qty_cod > 0);
             return (
               <>
                 <tr key={w.id}>
@@ -467,7 +464,7 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
                         return (
                           <div key={idx} className="mini">
                             {p ? p.name + (p.variant ? ' - ' + p.variant : '') : 'Unknown product'}:
-                            {' '}COD <b>{it.qty_cod}</b> &middot; Paid <b>{it.qty_paid}</b> &middot; capital {money((it.qty_cod + it.qty_paid) * it.unit_cost)}
+                            {' '}COD <b>{it.qty_cod}</b> &middot; capital {money(it.qty_cod * it.unit_cost)}
                           </div>
                         );
                       }) : <div className="mini">No products logged.</div>}
@@ -489,9 +486,8 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
             <div className="field"><label>Paper date - the Dashboard filters by THIS</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
             <div className="field"><label>Delivered orders (COD)</label><input type="number" value={delivered} onChange={e => setDelivered(e.target.value)} /></div>
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
-            <div className="field"><label>Prepaid orders (Whish/manual)</label><input type="number" value={paidOrders} onChange={e => setPaidOrders(e.target.value)} /></div>
           </div>
-          <div className="note" style={{marginBottom:10}}>Packaging cost is $1 per shipped order - delivered + prepaid, both need a box.</div>
+          <div className="note" style={{marginBottom:10}}>Packaging cost is $1 per delivered order. Prepaid/Whish orders are tracked separately in the Prepaid tab.</div>
 
           <div className="week-detail" style={{ background: '#f4f0e2', marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
@@ -526,31 +522,280 @@ function Weeks({ weeks, legacy, products, weekTotals, reload }) {
 
           <div className="newweek-grid">
             <div className="field"><label>Revenue - COD (Topspeed's "Amount To Be Paid", already net)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
-            <div className="field"><label>Revenue - Paid (real $ from Shopify)</label><input type="number" step="0.01" value={revenuePaid} onChange={e => setRevenuePaid(e.target.value)} /></div>
           </div>
           <div className="note" style={{ marginBottom: 10 }}>Type the exact "Amount To Be Paid" total from the paper's summary box - already net of Topspeed's delivery fee, no further deduction happens. The product grid below only sets Capital, not revenue.</div>
           <input className="search" placeholder="Search a product..." value={filter} onChange={e => setFilter(e.target.value)} />
-          <div className="qtyhead"><div>Product</div><div>COD</div><div>Paid</div><div>Capital</div></div>
+          <div className="qtyhead" style={{gridTemplateColumns:'1fr 70px 90px'}}><div>Product</div><div>Qty</div><div>Capital</div></div>
           <div className="qtygrid">
             {filtered.map(p => {
               const q = qty[p.id] || {};
-              const lineCap = ((Number(q.cod) || 0) + (Number(q.paid) || 0)) * p.cost;
+              const lineCap = (Number(q.cod) || 0) * p.cost;
               return (
-                <div key={p.id} className="qtyrow">
+                <div key={p.id} className="qtyrow" style={{gridTemplateColumns:'1fr 70px 90px'}}>
                   <div><span className="pname">{p.name}</span>{p.variant ? <span className="pvariant"> - {p.variant}</span> : null}</div>
                   <input type="number" min="0" value={q.cod || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { ...s[p.id], cod: e.target.value } }))} />
-                  <input type="number" min="0" value={q.paid || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { ...s[p.id], paid: e.target.value } }))} />
                   <div className="lineval">{money(lineCap)}</div>
                 </div>
               );
             })}
           </div>
-          <div className="livebar"><span>Revenue: <b>{money((Number(revenueCod) || 0) + (Number(revenuePaid) || 0))}</b></span><span>Capital: <b>{money(liveCapital)}</b></span></div>
+          <div className="livebar"><span>Revenue: <b>{money(Number(revenueCod) || 0)}</b></span><span>Capital: <b>{money(liveCapital)}</b></span></div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update week' : 'Save week'}</button>
             <button className="btn ghost2" onClick={() => { setAdding(false); setEditingId(null); }}>Cancel</button>
           </div>
           <div className="note">COD = delivered via Topspeed, charged the delivery fee. Paid = already paid online (Whish/manual), no delivery fee.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Prepaid({ weeks, products, weekTotals, reload }) {
+  const prepaidWeeks = weeks.filter(w => w.kind === 'prepaid');
+  const [expanded, setExpanded] = useState({});
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [label, setLabel] = useState('');
+  const [date, setDate] = useState(todayStr());
+  const [filter, setFilter] = useState('');
+  const [qty, setQty] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [trackingText, setTrackingText] = useState('');
+  const [looking, setLooking] = useState(false);
+  const [lookupResult, setLookupResult] = useState(null);
+
+  const filtered = products.filter(p =>
+    !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
+  );
+
+  const live = useMemo(() => {
+    let revenue = 0, capital = 0;
+    products.forEach(p => {
+      const q = Number((qty[p.id] || {}).paid) || 0;
+      revenue += q * Number(p.price);
+      capital += q * Number(p.cost);
+    });
+    return { revenue, capital };
+  }, [qty, products]);
+
+  function matchProduct(title, variant) {
+    const t = (title || '').trim().toLowerCase();
+    const v = (variant || '').trim().toLowerCase();
+    let hit = products.find(p => p.name.trim().toLowerCase() === t && (p.variant || '').trim().toLowerCase() === v);
+    if (hit) return hit;
+    hit = products.find(p => p.name.trim().toLowerCase() === t);
+    if (hit) return hit;
+    hit = products.find(p => t.includes(p.name.trim().toLowerCase()) || p.name.trim().toLowerCase().includes(t));
+    return hit || null;
+  }
+
+  async function lookupTracking() {
+    const list = trackingText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (!list.length) return;
+    setLooking(true);
+    setLookupResult(null);
+    try {
+      const res = await fetch('/api/shopify-lookup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackingNumbers: list }),
+      });
+      const data = await res.json();
+      if (data.error) { alert('Lookup failed: ' + data.error); setLooking(false); return; }
+
+      const newQty = { ...qty };
+      let unmatchedProducts = new Set();
+      data.matched.forEach(order => {
+        order.lineItems.forEach(li => {
+          const p = matchProduct(li.title, li.variant);
+          if (!p) { unmatchedProducts.add(li.title + (li.variant ? ' - ' + li.variant : '')); return; }
+          const existing = newQty[p.id] || {};
+          newQty[p.id] = { ...existing, paid: (Number(existing.paid) || 0) + li.quantity };
+        });
+      });
+      setQty(newQty);
+      const revenueSum = data.matched.reduce((s, o) => s + o.total, 0);
+      setLookupResult({
+        matchedCount: data.matched.length,
+        totalRevenue: revenueSum,
+        notFound: data.notFound,
+        unmatchedProducts: [...unmatchedProducts],
+      });
+    } catch (err) {
+      alert('Lookup failed: ' + err.message);
+    }
+    setLooking(false);
+  }
+
+  function startAdd() {
+    setAdding(true); setEditingId(null);
+    setLabel(''); setDate(todayStr()); setFilter(''); setQty({});
+    setTrackingText(''); setLookupResult(null);
+  }
+
+  function startEditWeek(w) {
+    setAdding(true); setEditingId(w.id);
+    setLabel(w.label); setDate(w.week_date);
+    setFilter('');
+    const q = {};
+    (w.items || []).forEach(it => { q[it.product_id] = { paid: it.qty_paid || '' }; });
+    setQty(q);
+    setTrackingText(''); setLookupResult(null);
+    setExpanded(e => ({ ...e, [w.id]: false }));
+  }
+
+  async function saveWeek() {
+    setSaving(true);
+    try {
+      const matchedOrderCount = lookupResult ? lookupResult.matchedCount : 0;
+      const revenuePaid = lookupResult ? lookupResult.totalRevenue : 0;
+      const payload = {
+        label: label || `Prepaid ${date}`, week_date: date, kind: 'prepaid',
+        delivered: 0, cancelled: 0, revenue_cod: 0,
+        revenue_paid: revenuePaid, paid_orders: matchedOrderCount,
+      };
+
+      let weekId = editingId;
+      if (editingId) {
+        const { error: uerr } = await supabase.from('weeks').update(payload).eq('id', editingId);
+        if (uerr) throw uerr;
+        const { error: derr } = await supabase.from('week_items').delete().eq('week_id', editingId);
+        if (derr) throw derr;
+      } else {
+        const { data: weekRow, error: werr } = await supabase.from('weeks').insert(payload).select().single();
+        if (werr) throw werr;
+        weekId = weekRow.id;
+      }
+
+      const itemsToInsert = [];
+      products.forEach(p => {
+        const paid = Number((qty[p.id] || {}).paid) || 0;
+        if (paid > 0) {
+          itemsToInsert.push({ week_id: weekId, product_id: p.id, qty_cod: 0, qty_paid: paid, unit_price: p.price, unit_cost: p.cost });
+        }
+      });
+      if (itemsToInsert.length) {
+        const { error: ierr } = await supabase.from('week_items').insert(itemsToInsert);
+        if (ierr) throw ierr;
+      }
+      setAdding(false); setEditingId(null);
+      await reload();
+    } catch (err) {
+      alert('Could not save: ' + (err.message || JSON.stringify(err)));
+    }
+    setSaving(false);
+  }
+
+  async function deleteWeek(id) {
+    if (!confirm('Delete this prepaid entry?')) return;
+    await supabase.from('week_items').delete().eq('week_id', id);
+    await supabase.from('weeks').delete().eq('id', id);
+    await reload();
+  }
+
+  return (
+    <div className="panel">
+      <h2>Prepaid <small>Whish Pay / manual - add as often as they come in, daily is fine</small></h2>
+      <table className="tbl">
+        <thead>
+          <tr><th>Entry</th><th>Orders</th><th>Revenue</th><th>Capital</th><th>Packaging</th><th></th></tr>
+        </thead>
+        <tbody>
+          {prepaidWeeks.map(w => {
+            const t = weekTotals(w);
+            const isOpen = expanded[w.id];
+            const nonZero = (w.items || []).filter(it => it.qty_paid > 0);
+            return (
+              <>
+                <tr key={w.id}>
+                  <td>
+                    <button className="expand" onClick={() => setExpanded(e => ({ ...e, [w.id]: !e[w.id] }))}>{isOpen ? '▾' : '▸'}</button>
+                    {w.label} <span className="mini">({w.week_date})</span>
+                  </td>
+                  <td>{w.paid_orders}</td>
+                  <td>{money(t.revenue)}</td><td>{money(t.capital)}</td><td>{money(t.packaging)}</td>
+                  <td>
+                    <button className="expand" onClick={() => startEditWeek(w)}>Edit</button>
+                    <button className="del" onClick={() => deleteWeek(w.id)}>✕</button>
+                  </td>
+                </tr>
+                {isOpen && (
+                  <tr><td colSpan={6}>
+                    <div className="week-detail">
+                      {nonZero.length ? nonZero.map((it, idx) => {
+                        const p = products.find(pp => pp.id === it.product_id);
+                        return (
+                          <div key={idx} className="mini">
+                            {p ? p.name + (p.variant ? ' - ' + p.variant : '') : 'Unknown product'}: <b>{it.qty_paid}</b> &middot; capital {money(it.qty_paid * it.unit_cost)}
+                          </div>
+                        );
+                      }) : <div className="mini">No products logged.</div>}
+                    </div>
+                  </td></tr>
+                )}
+              </>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {!adding && <div style={{ marginTop: 14 }}><button className="btn gold" onClick={startAdd}>+ Add prepaid orders</button></div>}
+
+      {adding && (
+        <div className="week-detail" style={{ borderTop: '2px solid var(--gold)', marginTop: 16, paddingTop: 16 }}>
+          <div className="newweek-grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+            <div className="field"><label>Entry label</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Whish - 24 Aug" /></div>
+            <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
+          </div>
+
+          <div className="week-detail" style={{ background: '#f4f0e2', marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
+              Paste the tracking number(s) for the prepaid order(s) - looks them up in Shopify automatically
+            </label>
+            <textarea
+              value={trackingText}
+              onChange={e => setTrackingText(e.target.value)}
+              rows={2}
+              style={{ width: '100%', padding: 8, border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'IBM Plex Mono, monospace' }}
+              placeholder={'SS0033487 21'}
+            />
+            <div style={{ marginTop: 8 }}>
+              <button className="btn gold" onClick={lookupTracking} disabled={looking}>{looking ? 'Looking up...' : 'Look up in Shopify'}</button>
+            </div>
+            {lookupResult && (
+              <div className="note" style={{ marginTop: 8 }}>
+                Matched {lookupResult.matchedCount} orders, revenue {money(lookupResult.totalRevenue)}. Product quantities filled in below.
+                {lookupResult.notFound.length > 0 && (
+                  <div style={{ color: 'var(--bad)', marginTop: 4 }}>Not found: {lookupResult.notFound.join(', ')}</div>
+                )}
+                {lookupResult.unmatchedProducts.length > 0 && (
+                  <div style={{ color: 'var(--warn)', marginTop: 4 }}>Product not in your Products tab: {lookupResult.unmatchedProducts.join(', ')}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <input className="search" placeholder="Search a product..." value={filter} onChange={e => setFilter(e.target.value)} />
+          <div className="qtyhead" style={{gridTemplateColumns:'1fr 70px 90px'}}><div>Product</div><div>Qty</div><div>Capital</div></div>
+          <div className="qtygrid">
+            {filtered.map(p => {
+              const q = qty[p.id] || {};
+              const lineCap = (Number(q.paid) || 0) * p.cost;
+              return (
+                <div key={p.id} className="qtyrow" style={{gridTemplateColumns:'1fr 70px 90px'}}>
+                  <div><span className="pname">{p.name}</span>{p.variant ? <span className="pvariant"> - {p.variant}</span> : null}</div>
+                  <input type="number" min="0" value={q.paid || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { paid: e.target.value } }))} />
+                  <div className="lineval">{money(lineCap)}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="livebar"><span>Revenue: <b>{money(lookupResult ? lookupResult.totalRevenue : live.revenue)}</b></span><span>Capital: <b>{money(live.capital)}</b></span></div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update entry' : 'Save entry'}</button>
+            <button className="btn ghost2" onClick={() => { setAdding(false); setEditingId(null); }}>Cancel</button>
+          </div>
+          <div className="note">Revenue and order count come from the Shopify lookup automatically. Packaging ($1/order) is included in Cash Out same as Topspeed orders.</div>
         </div>
       )}
     </div>
