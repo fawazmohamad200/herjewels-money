@@ -930,19 +930,24 @@ function Products({ products, reload }) {
 }
 
 function Ads({ ads, legacy, reload }) {
-  const [label, setLabel] = useState('');
-  const [amount, setAmount] = useState('');
-  const [platform, setPlatform] = useState('Meta');
+  const [metaAmount, setMetaAmount] = useState('');
+  const [tiktokAmount, setTiktokAmount] = useState('');
+  const [otherAmount, setOtherAmount] = useState('');
   const [date, setDate] = useState(todayStr());
 
   async function addAd() {
-    if (!amount) return;
-    const finalLabel = label || `${platform}, ${date}`;
+    const meta = Number(metaAmount) || 0, tiktok = Number(tiktokAmount) || 0, other = Number(otherAmount) || 0;
+    const total = meta + tiktok + other;
+    if (total <= 0) return;
+    const parts = [];
+    if (meta) parts.push(`Meta $${meta.toFixed(2)}`);
+    if (tiktok) parts.push(`TikTok $${tiktok.toFixed(2)}`);
+    if (other) parts.push(`Other $${other.toFixed(2)}`);
     const { error } = await supabase.from('ads').insert({
-      label: finalLabel, amount: Number(amount), platform, ad_date: date, ad_date_to: date,
+      label: parts.join(' + '), amount: total, platform: 'Combined', ad_date: date, ad_date_to: date,
     });
     if (error) { alert('Could not add: ' + error.message); return; }
-    setLabel(''); setAmount('');
+    setMetaAmount(''); setTiktokAmount(''); setOtherAmount('');
     await reload();
   }
   async function deleteAd(id) {
@@ -952,33 +957,29 @@ function Ads({ ads, legacy, reload }) {
 
   return (
     <div className="panel">
-      <h2>Ads <small>one entry per platform per DAY - this is what makes Performance for any date range accurate</small></h2>
+      <h2>Ads <small>one row per day - Meta and TikTok combined into one total</small></h2>
       <table className="tbl">
-        <thead><tr><th>Date</th><th>Platform</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Breakdown</th><th>Total</th><th></th></tr></thead>
         <tbody>
           {legacy.filter(b => b.ads).map(b => (
             <tr key={'lg' + b.id} style={{ opacity: .65 }}><td>{b.label} <span className="mini">(legacy)</span></td><td>-</td><td>{money(b.ads)}</td><td></td></tr>
           ))}
           {ads.map(a => (
             <tr key={a.id}>
-              <td>{a.ad_date}</td><td>{a.platform}</td><td>{money(a.amount)}</td>
+              <td>{a.ad_date}</td><td className="mini">{a.label}</td><td>{money(a.amount)}</td>
               <td><button className="del" onClick={() => deleteAd(a.id)}>✕</button></td>
             </tr>
           ))}
         </tbody>
       </table>
-      <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr 1fr auto' }}>
-        <div className="field">
-          <label>Platform</label>
-          <select value={platform} onChange={e => setPlatform(e.target.value)} style={{width:'100%',padding:'8px 9px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,background:'#fbfaf6'}}>
-            <option>Meta</option><option>TikTok</option><option>Other</option>
-          </select>
-        </div>
+      <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr 1fr 1fr auto' }}>
         <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
-        <div className="field"><label>Amount $</label><input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} /></div>
+        <div className="field"><label>Meta $</label><input type="number" step="0.01" value={metaAmount} onChange={e => setMetaAmount(e.target.value)} /></div>
+        <div className="field"><label>TikTok $</label><input type="number" step="0.01" value={tiktokAmount} onChange={e => setTiktokAmount(e.target.value)} /></div>
+        <div className="field"><label>Other $</label><input type="number" step="0.01" value={otherAmount} onChange={e => setOtherAmount(e.target.value)} /></div>
         <button className="btn gold" onClick={addAd}>Add</button>
       </div>
-      <div className="note">Same day, two platforms = two rows: add Meta, then click Add again for TikTok with the same date.</div>
+      <div className="note">Leave a field blank/0 if you didn't spend there that day. One combined total gets saved for the date.</div>
     </div>
   );
 }
@@ -990,8 +991,6 @@ function Performance({ orders, ads }) {
 
   const filteredAds = ads.filter(a => a.ad_date >= from && a.ad_date <= to);
   const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
-  const byPlatform = {};
-  filteredAds.forEach(a => { byPlatform[a.platform] = (byPlatform[a.platform] || 0) + Number(a.amount); });
 
   const filteredOrders = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
   const revenue = filteredOrders.reduce((s, o) => s + Number(o.total), 0);
@@ -1031,12 +1030,12 @@ function Performance({ orders, ads }) {
       </div>
 
       <div className="panel">
-        <h2>Ad spend by platform, this window</h2>
+        <h2>Ad spend by day, this window</h2>
         <table className="tbl">
           <tbody>
-            {Object.keys(byPlatform).length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
-            {Object.entries(byPlatform).map(([p, amt]) => (
-              <tr key={p}><td>{p}</td><td>{money(amt)}</td></tr>
+            {filteredAds.length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
+            {filteredAds.map(a => (
+              <tr key={a.id}><td>{a.ad_date} <span className="mini">({a.label})</span></td><td>{money(a.amount)}</td></tr>
             ))}
           </tbody>
         </table>
