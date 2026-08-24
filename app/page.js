@@ -113,11 +113,6 @@ export default function Home() {
     if (!dateStr) return true;
     return dateStr >= fromDate && dateStr <= toDate;
   };
-  const rangeOverlaps = (start, end) => {
-    const s = start || end, e = end || start;
-    if (!s) return true;
-    return s <= toDate && e >= fromDate;
-  };
 
   const totals = useMemo(() => {
     let topspeedCash = 0, capitalTotal = 0, packagingTotal = 0, deliveredTotal = 0, cancelledTotal = 0, revenueTotal = 0;
@@ -139,7 +134,7 @@ export default function Home() {
       revenueTotal += Number(b.revenue) || 0;
     });
     let adsTotal = 0;
-    ads.forEach(a => { if (rangeOverlaps(a.ad_date, a.ad_date_to)) adsTotal += Number(a.amount) || 0; });
+    ads.forEach(a => { if (inRange(a.ad_date)) adsTotal += Number(a.amount) || 0; });
     legacy.forEach(b => { adsTotal += Number(b.ads) || 0; });
 
     const cashIn = topspeedCash;
@@ -938,15 +933,13 @@ function Ads({ ads, legacy, reload }) {
   const [label, setLabel] = useState('');
   const [amount, setAmount] = useState('');
   const [platform, setPlatform] = useState('Meta');
-  const [dateFrom, setDateFrom] = useState(todayStr());
-  const [dateTo, setDateTo] = useState(todayStr());
+  const [date, setDate] = useState(todayStr());
 
   async function addAd() {
     if (!amount) return;
-    const finalLabel = label || `${platform}, ${dateFrom} to ${dateTo}`;
+    const finalLabel = label || `${platform}, ${date}`;
     const { error } = await supabase.from('ads').insert({
-      label: finalLabel, amount: Number(amount), platform,
-      ad_date: dateFrom, ad_date_to: dateTo,
+      label: finalLabel, amount: Number(amount), platform, ad_date: date, ad_date_to: date,
     });
     if (error) { alert('Could not add: ' + error.message); return; }
     setLabel(''); setAmount('');
@@ -959,35 +952,33 @@ function Ads({ ads, legacy, reload }) {
 
   return (
     <div className="panel">
-      <h2>Ads <small>log spend per platform, for whatever date range you're looking at</small></h2>
+      <h2>Ads <small>one entry per platform per DAY - this is what makes Performance for any date range accurate</small></h2>
       <table className="tbl">
-        <thead><tr><th>Period</th><th>Platform</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Platform</th><th>Amount</th><th></th></tr></thead>
         <tbody>
           {legacy.filter(b => b.ads).map(b => (
             <tr key={'lg' + b.id} style={{ opacity: .65 }}><td>{b.label} <span className="mini">(legacy)</span></td><td>-</td><td>{money(b.ads)}</td><td></td></tr>
           ))}
           {ads.map(a => (
             <tr key={a.id}>
-              <td>{a.label} <span className="mini">({a.ad_date}{a.ad_date_to && a.ad_date_to !== a.ad_date ? ` to ${a.ad_date_to}` : ''})</span></td>
-              <td>{a.platform}</td><td>{money(a.amount)}</td>
+              <td>{a.ad_date}</td><td>{a.platform}</td><td>{money(a.amount)}</td>
               <td><button className="del" onClick={() => deleteAd(a.id)}>✕</button></td>
             </tr>
           ))}
         </tbody>
       </table>
-      <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr 1fr 1fr auto' }}>
+      <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr 1fr auto' }}>
         <div className="field">
           <label>Platform</label>
           <select value={platform} onChange={e => setPlatform(e.target.value)} style={{width:'100%',padding:'8px 9px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,background:'#fbfaf6'}}>
             <option>Meta</option><option>TikTok</option><option>Other</option>
           </select>
         </div>
-        <div className="field"><label>From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
-        <div className="field"><label>To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
+        <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
         <div className="field"><label>Amount $</label><input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} /></div>
         <button className="btn gold" onClick={addAd}>Add</button>
       </div>
-      <div className="note">Add one entry per platform - so for the same week you'll add a Meta row, then a TikTok row. Both feed Cash Out and the Performance report.</div>
+      <div className="note">Same day, two platforms = two rows: add Meta, then click Add again for TikTok with the same date.</div>
     </div>
   );
 }
@@ -997,21 +988,15 @@ function Performance({ orders, ads }) {
   const [from, setFrom] = useState(earliest);
   const [to, setTo] = useState(todayStr());
 
-  function overlaps(start, end) {
-    const s = start || end, e = end || start;
-    if (!s) return true;
-    return s <= to && e >= from;
-  }
+  const filteredAds = ads.filter(a => a.ad_date >= from && a.ad_date <= to);
+  const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
+  const byPlatform = {};
+  filteredAds.forEach(a => { byPlatform[a.platform] = (byPlatform[a.platform] || 0) + Number(a.amount); });
 
   const filteredOrders = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
   const revenue = filteredOrders.reduce((s, o) => s + Number(o.total), 0);
   const capital = filteredOrders.reduce((s, o) => s + Number(o.capital), 0);
   const packaging = filteredOrders.length * 1;
-
-  const filteredAds = ads.filter(a => overlaps(a.ad_date, a.ad_date_to));
-  const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
-  const byPlatform = {};
-  filteredAds.forEach(a => { byPlatform[a.platform] = (byPlatform[a.platform] || 0) + Number(a.amount); });
 
   const profit = revenue - capital - packaging - adSpend;
   const codCount = filteredOrders.filter(o => o.kind === 'topspeed').length;
