@@ -82,16 +82,20 @@ export default function Home() {
 
   function handleKey(k) {
     if (k === '⌫') { setPinInput(p => p.slice(0, -1)); setPinErr(''); return; }
-    setPinInput(p => {
-      const next = p.length < 4 ? p + k : p;
-      if (next.length === 4) {
-        if (next === PIN) { setUnlocked(true); setPinErr(''); return ''; }
-        setPinErr('Wrong PIN. Try again.');
-        return '';
-      }
-      return next;
-    });
+    setPinInput(p => (p.length < 4 ? p + k : p));
   }
+
+  useEffect(() => {
+    if (pinInput.length !== 4) return;
+    if (pinInput === PIN) {
+      setUnlocked(true);
+      setPinInput('');
+      setPinErr('');
+    } else {
+      setPinErr('Wrong PIN. Try again.');
+      setPinInput('');
+    }
+  }, [pinInput]);
 
   const weekTotals = (w) => {
     let capCod = 0, capPaid = 0;
@@ -152,7 +156,7 @@ export default function Home() {
     return (
       <div className="gate">
         <div className="gate-card">
-          <div className="gate-mark">HJ</div>
+          <img src="https://cdn.shopify.com/s/files/1/0823/5171/8617/files/herjewels-logo.jpg?v=1784118069" alt="HerJewels" className="gate-mark" style={{objectFit:'cover'}}/>
           <h1 className="serif">HerJewels Money</h1>
           <p>Enter the shared PIN</p>
           <div className="pin-dots">{dots}</div>
@@ -174,7 +178,7 @@ export default function Home() {
       {dbError && <div className="banner">⚠ {dbError}</div>}
       <div className="header">
         <div className="brand">
-          <div className="brand-mark">HJ</div>
+          <img src="https://cdn.shopify.com/s/files/1/0823/5171/8617/files/herjewels-logo.jpg?v=1784118069" alt="HerJewels" className="brand-mark" style={{objectFit:'cover'}}/>
           <div><h1>HerJewels</h1><span>Money & Capital Tracker</span></div>
         </div>
         <div className="tabs">
