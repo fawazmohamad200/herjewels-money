@@ -1018,12 +1018,13 @@ function Performance({ orders, ads }) {
   const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
 
   const filteredOrders = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
-  const revenue = filteredOrders.reduce((s, o) => s + Number(o.total), 0);
-  const capital = filteredOrders.reduce((s, o) => s + Number(o.capital), 0);
+  const grossRevenue = filteredOrders.reduce((s, o) => s + Number(o.total), 0);
   const fees = filteredOrders.reduce((s, o) => s + Number(o.fee || 0), 0);
+  const revenue = grossRevenue - fees; // net cash actually collected - same definition as Weeks/Prepaid/Dashboard
+  const capital = filteredOrders.reduce((s, o) => s + Number(o.capital), 0);
   const packaging = filteredOrders.length * 1;
 
-  const profit = revenue - fees - capital - packaging - adSpend;
+  const profit = revenue - capital - packaging - adSpend;
   const codCount = filteredOrders.filter(o => o.kind === 'topspeed').length;
   const prepaidCount = filteredOrders.filter(o => o.kind === 'prepaid').length;
 
@@ -1038,7 +1039,7 @@ function Performance({ orders, ads }) {
       <div className="kpis">
         <div className="kpi accent"><div className="lbl">Revenue</div><div className="val">{money(revenue)}</div></div>
         <div className="kpi warn"><div className="lbl">Ad spend</div><div className="val">{money(adSpend)}</div></div>
-        <div className="kpi warn"><div className="lbl">Fees + capital + packaging</div><div className="val">{money(fees + capital + packaging)}</div></div>
+        <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(capital + packaging)}</div></div>
         <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit</div><div className="val">{money(profit)}</div></div>
       </div>
 
@@ -1046,8 +1047,10 @@ function Performance({ orders, ads }) {
         <h2>Orders placed in this window <small>{filteredOrders.length} orders - {codCount} via Topspeed, {prepaidCount} prepaid</small></h2>
         <table className="tbl">
           <tbody>
-            <tr><td>Revenue (real, already collected)</td><td>{money(revenue)}</td></tr>
+            <tr><td>Gross order value</td><td>{money(grossRevenue)}</td></tr>
             <tr><td>Topspeed delivery fees</td><td className="neg">-{money(fees)}</td></tr>
+            <tr><td><b>Net revenue (cash collected)</b></td><td><b>{money(revenue)}</b></td></tr>
+            <tr><td>&nbsp;</td><td></td></tr>
             <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
             <tr><td>Packaging ({filteredOrders.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
             <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
