@@ -192,7 +192,7 @@ export default function Home() {
           <div><h1>HerJewels</h1><span>Money & Capital Tracker</span></div>
         </div>
         <div className="tabs">
-          {['dashboard', 'weeks', 'prepaid', 'performance', 'products', 'ads', 'settings'].map(t => (
+          {['dashboard', 'weeks', 'performance', 'products', 'ads', 'settings'].map(t => (
             <div key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
             </div>
@@ -204,7 +204,6 @@ export default function Home() {
           <>
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} fromDate={fromDate} toDate={toDate} setFromDate={setFromDate} setToDate={setToDate} weeksCount={weeks.length} />}
             {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
-            {tab === 'prepaid' && <Prepaid weeks={weeks} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'performance' && <Performance orders={orders} ads={ads} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
@@ -287,7 +286,6 @@ function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDa
 }
 
 function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
-  const topspeedWeeks = weeks.filter(w => (w.kind || 'topspeed') === 'topspeed');
   const [expanded, setExpanded] = useState({});
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -296,15 +294,31 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
   const [delivered, setDelivered] = useState('');
   const [cancelled, setCancelled] = useState('');
   const [revenueCod, setRevenueCod] = useState('');
-  const [revenuePaid, setRevenuePaid] = useState(''); // unused for topspeed weeks, kept 0
-  const [paidOrders, setPaidOrders] = useState(''); // unused for topspeed weeks, kept 0
   const [filter, setFilter] = useState('');
   const [qty, setQty] = useState({}); // productId -> {cod, paid}
   const [saving, setSaving] = useState(false);
-  const [trackingText, setTrackingText] = useState('');
+  const [trackingCod, setTrackingCod] = useState('');
+  const [trackingPaid, setTrackingPaid] = useState('');
   const [looking, setLooking] = useState(false);
-  const [lookupResult, setLookupResult] = useState(null); // {matchedCount, notFound, unmatchedProducts}
-  const [matchedOrders, setMatchedOrders] = useState([]); // raw orders from last lookup, for saving into `orders` table
+  const [lookupResult, setLookupResult] = useState(null);
+  const [matchedOrders, setMatchedOrders] = useState([]); // {..., isPaidBox: true/false}
+
+  const filtered = products.filter(p =>
+    !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
+  );
+
+  const liveCapital = useMemo(() => {
+    let capital = 0;
+    products.forEach(p => {
+      const q = qty[p.id] || {};
+      capital += ((Number(q.cod) || 0) + (Number(q.paid) || 0)) * Number(p.cost);
+    });
+    return capital;
+  }, [qty, products]);
+
+  const livePaidRevenue = useMemo(() => {
+    return matchedOrders.filter(o => o.isPaidBox).reduce((s, o) => s + o.total, 0);
+  }, [matchedOrders]);
 
   function matchProduct(title, variant) {
     const t = (title || '').trim().toLowerCase();
@@ -317,33 +331,67 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
     return hit || null;
   }
 
+  function startAdd() {
+    setAdding(true); setEditingId(null);
+    setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
+    setRevenueCod(''); setFilter(''); setQty({});
+    setTrackingCod(''); setTrackingPaid(''); setLookupResult(null); setMatchedOrders([]);
+  }
+
+  function startEditWeek(w) {
+    setAdding(true); setEditingId(w.id);
+    setLabel(w.label); setDate(w.week_date);
+    setDelivered(String(w.delivered ?? '')); setCancelled(String(w.cancelled ?? ''));
+    setRevenueCod(String(w.revenue_cod ?? ''));
+    setFilter('');
+    const q = {};
+    (w.items || []).forEach(it => { q[it.product_id] = { cod: it.qty_cod || '', paid: it.qty_paid || '' }; });
+    setQty(q);
+    const savedOrders = orders.filter(o => o.week_id === w.id);
+    setTrackingCod(savedOrders.filter(o => o.kind === 'topspeed').map(o => o.tracking_number).filter(Boolean).join('\n'));
+    setTrackingPaid(savedOrders.filter(o => o.kind === 'prepaid').map(o => o.tracking_number).filter(Boolean).join('\n'));
+    setLookupResult(null); setMatchedOrders([]); // re-run "Look up" to refresh order records if you change anything
+    setExpanded(e => ({ ...e, [w.id]: false }));
+  }
+
   async function lookupTracking() {
-    const list = trackingText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-    if (!list.length) return;
+    const codList = trackingCod.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    const paidList = trackingPaid.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    const all = [...codList, ...paidList];
+    if (!all.length) return;
     setLooking(true);
     setLookupResult(null);
     try {
       const res = await fetch('/api/shopify-lookup', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackingNumbers: list }),
+        body: JSON.stringify({ trackingNumbers: all }),
       });
       const data = await res.json();
       if (data.error) { alert('Lookup failed: ' + data.error); setLooking(false); return; }
 
+      const codSet = new Set(codList.map(t => t.replace(/\s+/g, '').toUpperCase()));
+      const paidSet = new Set(paidList.map(t => t.replace(/\s+/g, '').toUpperCase()));
+
       const newQty = { ...qty };
       let unmatchedProducts = new Set();
-      data.matched.forEach(order => {
+      const withClassification = data.matched.map(order => {
+        const normTrack = (order.trackingNumber || '').replace(/\s+/g, '').toUpperCase();
+        const isPaidBox = paidSet.has(normTrack) && !codSet.has(normTrack);
         order.lineItems.forEach(li => {
           const p = matchProduct(li.title, li.variant);
           if (!p) { unmatchedProducts.add(li.title + (li.variant ? ' - ' + li.variant : '')); return; }
+          const key = isPaidBox ? 'paid' : 'cod';
           const existing = newQty[p.id] || {};
-          newQty[p.id] = { ...existing, cod: (Number(existing.cod) || 0) + li.quantity };
+          newQty[p.id] = { ...existing, [key]: (Number(existing[key]) || 0) + li.quantity };
         });
+        return { ...order, isPaidBox };
       });
       setQty(newQty);
-      setMatchedOrders(data.matched);
+      setMatchedOrders(withClassification);
       setLookupResult({
         matchedCount: data.matched.length,
+        codCount: withClassification.filter(o => !o.isPaidBox).length,
+        paidCount: withClassification.filter(o => o.isPaidBox).length,
         notFound: data.notFound,
         unmatchedProducts: [...unmatchedProducts],
       });
@@ -353,59 +401,22 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
     setLooking(false);
   }
 
-  const filtered = products.filter(p =>
-    !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
-  );
-
-  const liveCapital = useMemo(() => {
-    let capital = 0;
-    products.forEach(p => {
-      const q = qty[p.id] || {};
-      const cod = Number(q.cod) || 0, paid = Number(q.paid) || 0;
-      capital += (cod + paid) * Number(p.cost);
-    });
-    return capital;
-  }, [qty, products]);
-
-  function startAdd() {
-    setAdding(true); setEditingId(null);
-    setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
-    setRevenueCod(''); setRevenuePaid(''); setPaidOrders(''); setFilter(''); setQty({});
-    setTrackingText(''); setLookupResult(null); setMatchedOrders([]);
-  }
-
-  function startEditWeek(w) {
-    setAdding(true); setEditingId(w.id);
-    setLabel(w.label); setDate(w.week_date);
-    setDelivered(String(w.delivered ?? '')); setCancelled(String(w.cancelled ?? ''));
-    setRevenueCod(String(w.revenue_cod ?? '')); setRevenuePaid(String(w.revenue_paid ?? ''));
-    setPaidOrders(String(w.paid_orders ?? ''));
-    setFilter('');
-    const q = {};
-    (w.items || []).forEach(it => {
-      q[it.product_id] = { cod: it.qty_cod || '', paid: it.qty_paid || '' };
-    });
-    setQty(q);
-    const savedOrders = orders.filter(o => o.week_id === w.id);
-    setTrackingText(savedOrders.map(o => o.tracking_number).filter(Boolean).join('\n'));
-    setLookupResult(null); setMatchedOrders([]); // re-run "Look up" to refresh order records if you change anything
-    setExpanded(e => ({ ...e, [w.id]: false }));
-  }
-
   async function saveWeek() {
     setSaving(true);
     try {
+      const paidRevenue = matchedOrders.filter(o => o.isPaidBox).reduce((s, o) => s + o.total, 0);
+      const paidOrderCount = matchedOrders.filter(o => o.isPaidBox).length;
+
       const payload = {
         label: label || `Week ${date}`, week_date: date, kind: 'topspeed',
         delivered: Number(delivered) || 0, cancelled: Number(cancelled) || 0,
-        revenue_cod: Number(revenueCod) || 0, revenue_paid: 0, paid_orders: 0,
+        revenue_cod: Number(revenueCod) || 0, revenue_paid: paidRevenue, paid_orders: paidOrderCount,
       };
 
       let weekId = editingId;
       if (editingId) {
         const { error: uerr } = await supabase.from('weeks').update(payload).eq('id', editingId);
         if (uerr) throw uerr;
-        // clear old items, we'll re-insert the current set
         const { error: derr } = await supabase.from('week_items').delete().eq('week_id', editingId);
         if (derr) throw derr;
       } else {
@@ -436,11 +447,10 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       if (matchedOrders.length) {
         await supabase.from('orders').delete().eq('week_id', weekId);
 
-        // Real average fee for THIS batch: gross Shopify total vs what the paper actually paid.
-        // Falls back to $3.50 (midpoint of the real $3-4 range) if that math doesn't make sense.
-        const grossTotal = matchedOrders.reduce((s, o) => s + o.total, 0);
-        const netFromPaper = Number(revenueCod) || 0;
-        let avgFee = (grossTotal - netFromPaper) / matchedOrders.length;
+        const codMatched = matchedOrders.filter(o => !o.isPaidBox);
+        const grossCod = codMatched.reduce((s, o) => s + o.total, 0);
+        const netCod = Number(revenueCod) || 0;
+        let avgFee = codMatched.length ? (grossCod - netCod) / codMatched.length : 3.5;
         if (!isFinite(avgFee) || avgFee < 0 || avgFee > 6) avgFee = 3.5;
 
         const orderRows = matchedOrders.map(o => {
@@ -452,7 +462,8 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
           return {
             order_name: o.name, tracking_number: o.trackingNumber,
             placed_at: (o.createdAt || '').slice(0, 10) || date,
-            total: o.total, capital, fee: avgFee, kind: 'topspeed', week_id: weekId,
+            total: o.total, capital, fee: o.isPaidBox ? 0 : avgFee,
+            kind: o.isPaidBox ? 'prepaid' : 'topspeed', week_id: weekId,
           };
         });
         const { error: oerr } = await supabase.from('orders').insert(orderRows);
@@ -476,25 +487,23 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
 
   return (
     <div className="panel">
-      <h2>Weeks <small>one row per Topspeed paper - COD orders only</small></h2>
+      <h2>Weeks <small>one entry per Topspeed paper - COD and already-paid orders together, exactly like the real paper</small></h2>
       <table className="tbl">
         <thead>
           <tr><th>Week</th><th>Delivered</th><th>Cancelled</th><th>Revenue</th><th>Cash</th><th>Capital</th><th>Packaging</th><th></th></tr>
         </thead>
         <tbody>
-          {legacy.map(b => {
-            return (
-              <tr key={'lg' + b.id} style={{ opacity: .65 }}>
-                <td>{b.label} <span className="mini">(legacy)</span></td>
-                <td>{b.delivered}</td><td>{b.cancelled}</td>
-                <td>{money(b.revenue)}</td><td>{money(b.revenue)}</td><td>{money(b.capital)}</td><td>-</td><td></td>
-              </tr>
-            );
-          })}
-          {topspeedWeeks.map(w => {
+          {legacy.map(b => (
+            <tr key={'lg' + b.id} style={{ opacity: .65 }}>
+              <td>{b.label} <span className="mini">(legacy)</span></td>
+              <td>{b.delivered}</td><td>{b.cancelled}</td>
+              <td>{money(b.revenue)}</td><td>{money(b.revenue)}</td><td>{money(b.capital)}</td><td>-</td><td></td>
+            </tr>
+          ))}
+          {weeks.map(w => {
             const t = weekTotals(w);
             const isOpen = expanded[w.id];
-            const nonZero = (w.items || []).filter(it => it.qty_cod > 0);
+            const nonZero = (w.items || []).filter(it => it.qty_cod > 0 || it.qty_paid > 0);
             return (
               <>
                 <tr key={w.id}>
@@ -517,12 +526,15 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                         return (
                           <div key={idx} className="mini">
                             {p ? p.name + (p.variant ? ' - ' + p.variant : '') : 'Unknown product'}:
-                            {' '}COD <b>{it.qty_cod}</b> &middot; capital {money(it.qty_cod * it.unit_cost)}
+                            {' '}COD <b>{it.qty_cod}</b> &middot; Already paid <b>{it.qty_paid}</b> &middot; capital {money((it.qty_cod + it.qty_paid) * it.unit_cost)}
                           </div>
                         );
                       }) : <div className="mini">No products logged.</div>}
                       <div className="mini" style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--line)'}}>
-                        Tracking numbers: {orders.filter(o => o.week_id === w.id).map(o => o.tracking_number).filter(Boolean).join(', ') || 'none saved'}
+                        COD tracking: {orders.filter(o => o.week_id === w.id && o.kind === 'topspeed').map(o => o.tracking_number).filter(Boolean).join(', ') || 'none'}
+                      </div>
+                      <div className="mini">
+                        Already-paid tracking: {orders.filter(o => o.week_id === w.id && o.kind === 'prepaid').map(o => o.tracking_number).filter(Boolean).join(', ') || 'none'}
                       </div>
                     </div>
                   </td></tr>
@@ -539,304 +551,32 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
         <div className="week-detail" style={{ borderTop: '2px solid var(--gold)', marginTop: 16, paddingTop: 16 }}>
           <div className="newweek-grid">
             <div className="field"><label>Week label</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="19 Aug paper" /></div>
-            <div className="field"><label>Paper date - the Dashboard filters by THIS</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
+            <div className="field"><label>Paper date - Dashboard filters by THIS</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
             <div className="field"><label>Delivered orders (COD)</label><input type="number" value={delivered} onChange={e => setDelivered(e.target.value)} /></div>
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
           </div>
-          <div className="note" style={{marginBottom:10}}>Packaging cost is $1 per delivered order. Prepaid/Whish orders are tracked separately in the Prepaid tab.</div>
-
-          <div className="week-detail" style={{ background: '#f4f0e2', marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
-              Paste every barcode from the paper (one per line or comma-separated) - looks them up in Shopify automatically
-            </label>
-            <textarea
-              value={trackingText}
-              onChange={e => setTrackingText(e.target.value)}
-              rows={3}
-              style={{ width: '100%', padding: 8, border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'IBM Plex Mono, monospace' }}
-              placeholder={'SS0033487 34\nSS0033487 33\n...'}
-            />
-            <div style={{ marginTop: 8 }}>
-              <button className="btn gold" onClick={lookupTracking} disabled={looking}>{looking ? 'Looking up...' : 'Look up in Shopify'}</button>
-            </div>
-            {lookupResult && (
-              <div className="note" style={{ marginTop: 8 }}>
-                Matched {lookupResult.matchedCount} orders. Product quantities and Paid orders/Revenue filled in below - check before saving.
-                {lookupResult.notFound.length > 0 && (
-                  <div style={{ color: 'var(--bad)', marginTop: 4 }}>
-                    Not found in Shopify ({lookupResult.notFound.length}): {lookupResult.notFound.join(', ')} - likely WhatsApp orders not entered yet, or cancelled.
-                  </div>
-                )}
-                {lookupResult.unmatchedProducts.length > 0 && (
-                  <div style={{ color: 'var(--warn)', marginTop: 4 }}>
-                    Product name not in your Products tab ({lookupResult.unmatchedProducts.length}): {lookupResult.unmatchedProducts.join(', ')} - add it there, then look up again.
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           <div className="newweek-grid">
             <div className="field"><label>Revenue - COD (Topspeed's "Amount To Be Paid", already net)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
           </div>
-          <div className="note" style={{ marginBottom: 10 }}>Type the exact "Amount To Be Paid" total from the paper's summary box - already net of Topspeed's delivery fee, no further deduction happens. The product grid below only sets Capital, not revenue.</div>
-          <input className="search" placeholder="Search a product..." value={filter} onChange={e => setFilter(e.target.value)} />
-          <div className="qtyhead" style={{gridTemplateColumns:'1fr 70px 90px'}}><div>Product</div><div>Qty</div><div>Capital</div></div>
-          <div className="qtygrid">
-            {filtered.map(p => {
-              const q = qty[p.id] || {};
-              const lineCap = (Number(q.cod) || 0) * p.cost;
-              return (
-                <div key={p.id} className="qtyrow" style={{gridTemplateColumns:'1fr 70px 90px'}}>
-                  <div><span className="pname">{p.name}</span>{p.variant ? <span className="pvariant"> - {p.variant}</span> : null}</div>
-                  <input type="number" min="0" value={q.cod || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { ...s[p.id], cod: e.target.value } }))} />
-                  <div className="lineval">{money(lineCap)}</div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="livebar"><span>Revenue: <b>{money(Number(revenueCod) || 0)}</b></span><span>Capital: <b>{money(liveCapital)}</b></span></div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update week' : 'Save week'}</button>
-            <button className="btn ghost2" onClick={() => { setAdding(false); setEditingId(null); }}>Cancel</button>
-          </div>
-          <div className="note">COD = delivered via Topspeed, charged the delivery fee. Prepaid orders are tracked in the Prepaid tab.</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Prepaid({ weeks, products, orders, weekTotals, reload }) {
-  const prepaidWeeks = weeks.filter(w => w.kind === 'prepaid');
-  const [expanded, setExpanded] = useState({});
-  const [adding, setAdding] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [label, setLabel] = useState('');
-  const [date, setDate] = useState(todayStr());
-  const [filter, setFilter] = useState('');
-  const [qty, setQty] = useState({});
-  const [saving, setSaving] = useState(false);
-  const [trackingText, setTrackingText] = useState('');
-  const [looking, setLooking] = useState(false);
-  const [lookupResult, setLookupResult] = useState(null);
-  const [matchedOrders, setMatchedOrders] = useState([]);
-
-  const filtered = products.filter(p =>
-    !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
-  );
-
-  const live = useMemo(() => {
-    let revenue = 0, capital = 0;
-    products.forEach(p => {
-      const q = Number((qty[p.id] || {}).paid) || 0;
-      revenue += q * Number(p.price);
-      capital += q * Number(p.cost);
-    });
-    return { revenue, capital };
-  }, [qty, products]);
-
-  function matchProduct(title, variant) {
-    const t = (title || '').trim().toLowerCase();
-    const v = (variant || '').trim().toLowerCase();
-    let hit = products.find(p => p.name.trim().toLowerCase() === t && (p.variant || '').trim().toLowerCase() === v);
-    if (hit) return hit;
-    hit = products.find(p => p.name.trim().toLowerCase() === t);
-    if (hit) return hit;
-    hit = products.find(p => t.includes(p.name.trim().toLowerCase()) || p.name.trim().toLowerCase().includes(t));
-    return hit || null;
-  }
-
-  async function lookupTracking() {
-    const list = trackingText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-    if (!list.length) return;
-    setLooking(true);
-    setLookupResult(null);
-    try {
-      const res = await fetch('/api/shopify-lookup', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackingNumbers: list }),
-      });
-      const data = await res.json();
-      if (data.error) { alert('Lookup failed: ' + data.error); setLooking(false); return; }
-
-      const newQty = { ...qty };
-      let unmatchedProducts = new Set();
-      data.matched.forEach(order => {
-        order.lineItems.forEach(li => {
-          const p = matchProduct(li.title, li.variant);
-          if (!p) { unmatchedProducts.add(li.title + (li.variant ? ' - ' + li.variant : '')); return; }
-          const existing = newQty[p.id] || {};
-          newQty[p.id] = { ...existing, paid: (Number(existing.paid) || 0) + li.quantity };
-        });
-      });
-      setQty(newQty);
-      setMatchedOrders(data.matched);
-      const revenueSum = data.matched.reduce((s, o) => s + o.total, 0);
-      setLookupResult({
-        matchedCount: data.matched.length,
-        totalRevenue: revenueSum,
-        notFound: data.notFound,
-        unmatchedProducts: [...unmatchedProducts],
-      });
-    } catch (err) {
-      alert('Lookup failed: ' + err.message);
-    }
-    setLooking(false);
-  }
-
-  function startAdd() {
-    setAdding(true); setEditingId(null);
-    setLabel(''); setDate(todayStr()); setFilter(''); setQty({});
-    setTrackingText(''); setLookupResult(null); setMatchedOrders([]);
-  }
-
-  function startEditWeek(w) {
-    setAdding(true); setEditingId(w.id);
-    setLabel(w.label); setDate(w.week_date);
-    setFilter('');
-    const q = {};
-    (w.items || []).forEach(it => { q[it.product_id] = { paid: it.qty_paid || '' }; });
-    setQty(q);
-    const savedOrders = orders.filter(o => o.week_id === w.id);
-    setTrackingText(savedOrders.map(o => o.tracking_number).filter(Boolean).join('\n'));
-    setLookupResult(null); setMatchedOrders([]);
-    setExpanded(e => ({ ...e, [w.id]: false }));
-  }
-
-  async function saveWeek() {
-    setSaving(true);
-    try {
-      const matchedOrderCount = lookupResult ? lookupResult.matchedCount : 0;
-      const revenuePaid = lookupResult ? lookupResult.totalRevenue : 0;
-      const payload = {
-        label: label || `Prepaid ${date}`, week_date: date, kind: 'prepaid',
-        delivered: 0, cancelled: 0, revenue_cod: 0,
-        revenue_paid: revenuePaid, paid_orders: matchedOrderCount,
-      };
-
-      let weekId = editingId;
-      if (editingId) {
-        const { error: uerr } = await supabase.from('weeks').update(payload).eq('id', editingId);
-        if (uerr) throw uerr;
-        const { error: derr } = await supabase.from('week_items').delete().eq('week_id', editingId);
-        if (derr) throw derr;
-      } else {
-        const { data: weekRow, error: werr } = await supabase.from('weeks').insert(payload).select().single();
-        if (werr) throw werr;
-        weekId = weekRow.id;
-      }
-
-      const itemsToInsert = [];
-      products.forEach(p => {
-        const paid = Number((qty[p.id] || {}).paid) || 0;
-        if (paid > 0) {
-          itemsToInsert.push({ week_id: weekId, product_id: p.id, qty_cod: 0, qty_paid: paid, unit_price: p.price, unit_cost: p.cost });
-        }
-      });
-      if (itemsToInsert.length) {
-        const { error: ierr } = await supabase.from('week_items').insert(itemsToInsert);
-        if (ierr) throw ierr;
-      }
-
-      if (matchedOrders.length) {
-        await supabase.from('orders').delete().eq('week_id', weekId);
-        const orderRows = matchedOrders.map(o => {
-          let capital = 0;
-          o.lineItems.forEach(li => {
-            const p = matchProduct(li.title, li.variant);
-            if (p) capital += li.quantity * p.cost;
-          });
-          return {
-            order_name: o.name, tracking_number: o.trackingNumber,
-            placed_at: (o.createdAt || '').slice(0, 10) || date,
-            total: o.total, capital, fee: 0, kind: 'prepaid', week_id: weekId,
-          };
-        });
-        const { error: oerr } = await supabase.from('orders').insert(orderRows);
-        if (oerr) throw oerr;
-      }
-
-      setAdding(false); setEditingId(null);
-      await reload();
-    } catch (err) {
-      alert('Could not save: ' + (err.message || JSON.stringify(err)));
-    }
-    setSaving(false);
-  }
-
-  async function deleteWeek(id) {
-    if (!confirm('Delete this prepaid entry?')) return;
-    await supabase.from('week_items').delete().eq('week_id', id);
-    await supabase.from('weeks').delete().eq('id', id);
-    await reload();
-  }
-
-  return (
-    <div className="panel">
-      <h2>Prepaid <small>Whish Pay / manual - add as often as they come in, daily is fine</small></h2>
-      <table className="tbl">
-        <thead>
-          <tr><th>Entry</th><th>Orders</th><th>Revenue</th><th>Capital</th><th>Packaging</th><th></th></tr>
-        </thead>
-        <tbody>
-          {prepaidWeeks.map(w => {
-            const t = weekTotals(w);
-            const isOpen = expanded[w.id];
-            const nonZero = (w.items || []).filter(it => it.qty_paid > 0);
-            return (
-              <>
-                <tr key={w.id}>
-                  <td>
-                    <button className="expand" onClick={() => setExpanded(e => ({ ...e, [w.id]: !e[w.id] }))}>{isOpen ? '▾' : '▸'}</button>
-                    {w.label} <span className="mini">({w.week_date})</span>
-                  </td>
-                  <td>{w.paid_orders}</td>
-                  <td>{money(t.revenue)}</td><td>{money(t.capital)}</td><td>{money(t.packaging)}</td>
-                  <td>
-                    <button className="expand" onClick={() => startEditWeek(w)}>Edit</button>
-                    <button className="del" onClick={() => deleteWeek(w.id)}>✕</button>
-                  </td>
-                </tr>
-                {isOpen && (
-                  <tr><td colSpan={6}>
-                    <div className="week-detail">
-                      {nonZero.length ? nonZero.map((it, idx) => {
-                        const p = products.find(pp => pp.id === it.product_id);
-                        return (
-                          <div key={idx} className="mini">
-                            {p ? p.name + (p.variant ? ' - ' + p.variant : '') : 'Unknown product'}: <b>{it.qty_paid}</b> &middot; capital {money(it.qty_paid * it.unit_cost)}
-                          </div>
-                        );
-                      }) : <div className="mini">No products logged.</div>}
-                      <div className="mini" style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--line)'}}>
-                        Tracking numbers: {orders.filter(o => o.week_id === w.id).map(o => o.tracking_number).filter(Boolean).join(', ') || 'none saved'}
-                      </div>
-                    </div>
-                  </td></tr>
-                )}
-              </>
-            );
-          })}
-        </tbody>
-      </table>
-
-      {!adding && <div style={{ marginTop: 14 }}><button className="btn gold" onClick={startAdd}>+ Add prepaid orders</button></div>}
-
-      {adding && (
-        <div className="week-detail" style={{ borderTop: '2px solid var(--gold)', marginTop: 16, paddingTop: 16 }}>
-          <div className="newweek-grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
-            <div className="field"><label>Entry label</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Whish - 24 Aug" /></div>
-            <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
-          </div>
+          <div className="note" style={{ marginBottom: 10 }}>Revenue - Paid calculates itself below, from the real Shopify totals of whatever you paste into the second box.</div>
 
           <div className="week-detail" style={{ background: '#f4f0e2', marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
-              Paste the tracking number(s) for the prepaid order(s) - looks them up in Shopify automatically
+              COD tracking numbers - orders Topspeed is collecting cash for
             </label>
             <textarea
-              value={trackingText}
-              onChange={e => setTrackingText(e.target.value)}
+              value={trackingCod}
+              onChange={e => setTrackingCod(e.target.value)}
+              rows={3}
+              style={{ width: '100%', padding: 8, border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'IBM Plex Mono, monospace', marginBottom: 12 }}
+              placeholder={'SS0033487 34\nSS0033487 33\n...'}
+            />
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
+              Already-paid tracking numbers - Whish/manual, no fee, cash already in your account
+            </label>
+            <textarea
+              value={trackingPaid}
+              onChange={e => setTrackingPaid(e.target.value)}
               rows={2}
               style={{ width: '100%', padding: 8, border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'IBM Plex Mono, monospace' }}
               placeholder={'SS0033487 21'}
@@ -846,38 +586,43 @@ function Prepaid({ weeks, products, orders, weekTotals, reload }) {
             </div>
             {lookupResult && (
               <div className="note" style={{ marginTop: 8 }}>
-                Matched {lookupResult.matchedCount} orders, revenue {money(lookupResult.totalRevenue)}. Product quantities filled in below.
+                Matched {lookupResult.matchedCount} orders - {lookupResult.codCount} COD, {lookupResult.paidCount} already paid. Product quantities filled in below.
                 {lookupResult.notFound.length > 0 && (
-                  <div style={{ color: 'var(--bad)', marginTop: 4 }}>Not found: {lookupResult.notFound.join(', ')}</div>
+                  <div style={{ color: 'var(--bad)', marginTop: 4 }}>
+                    Not found ({lookupResult.notFound.length}): {lookupResult.notFound.join(', ')}
+                  </div>
                 )}
                 {lookupResult.unmatchedProducts.length > 0 && (
-                  <div style={{ color: 'var(--warn)', marginTop: 4 }}>Product not in your Products tab: {lookupResult.unmatchedProducts.join(', ')}</div>
+                  <div style={{ color: 'var(--warn)', marginTop: 4 }}>
+                    Product not in your Products tab: {lookupResult.unmatchedProducts.join(', ')}
+                  </div>
                 )}
               </div>
             )}
           </div>
 
           <input className="search" placeholder="Search a product..." value={filter} onChange={e => setFilter(e.target.value)} />
-          <div className="qtyhead" style={{gridTemplateColumns:'1fr 70px 90px'}}><div>Product</div><div>Qty</div><div>Capital</div></div>
+          <div className="qtyhead"><div>Product</div><div>COD</div><div>Paid</div><div>Capital</div></div>
           <div className="qtygrid">
             {filtered.map(p => {
               const q = qty[p.id] || {};
-              const lineCap = (Number(q.paid) || 0) * p.cost;
+              const lineCap = ((Number(q.cod) || 0) + (Number(q.paid) || 0)) * p.cost;
               return (
-                <div key={p.id} className="qtyrow" style={{gridTemplateColumns:'1fr 70px 90px'}}>
+                <div key={p.id} className="qtyrow">
                   <div><span className="pname">{p.name}</span>{p.variant ? <span className="pvariant"> - {p.variant}</span> : null}</div>
-                  <input type="number" min="0" value={q.paid || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { paid: e.target.value } }))} />
+                  <input type="number" min="0" value={q.cod || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { ...s[p.id], cod: e.target.value } }))} />
+                  <input type="number" min="0" value={q.paid || ''} onChange={e => setQty(s => ({ ...s, [p.id]: { ...s[p.id], paid: e.target.value } }))} />
                   <div className="lineval">{money(lineCap)}</div>
                 </div>
               );
             })}
           </div>
-          <div className="livebar"><span>Revenue: <b>{money(lookupResult ? lookupResult.totalRevenue : live.revenue)}</b></span><span>Capital: <b>{money(live.capital)}</b></span></div>
+          <div className="livebar"><span>Revenue: <b>{money((Number(revenueCod) || 0) + livePaidRevenue)}</b></span><span>Capital: <b>{money(liveCapital)}</b></span></div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update entry' : 'Save entry'}</button>
+            <button className="btn gold" onClick={saveWeek} disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update week' : 'Save week'}</button>
             <button className="btn ghost2" onClick={() => { setAdding(false); setEditingId(null); }}>Cancel</button>
           </div>
-          <div className="note">Revenue and order count come from the Shopify lookup automatically. Packaging ($1/order) is included in Cash Out same as Topspeed orders.</div>
+          <div className="note">One paper, one entry. COD gets a delivery fee deducted automatically; already-paid does not.</div>
         </div>
       )}
     </div>
