@@ -215,7 +215,7 @@ export default function Home() {
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} weeksCount={weeks.length} />}
             {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'funds' && <Funds funds={funds} totals={totals} reload={loadAll} />}
-            {tab === 'performance' && <Performance orders={orders} ads={ads} />}
+            {tab === 'performance' && <Performance orders={orders} ads={ads} products={products} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
             {tab === 'settings' && <Settings settings={settings} reload={loadAll} />}
@@ -671,6 +671,7 @@ function Funds({ funds, totals, reload }) {
     await reload();
   }
   async function deleteEntry(id) {
+    if (!confirm('Delete this entry? This cannot be undone.')) return;
     await supabase.from('fund_entries').delete().eq('id', id);
     await reload();
   }
@@ -842,6 +843,7 @@ function Ads({ ads, legacy, reload }) {
     await reload();
   }
   async function deleteAd(id) {
+    if (!confirm('Delete this ad entry? This cannot be undone.')) return;
     await supabase.from('ads').delete().eq('id', id);
     await reload();
   }
@@ -875,7 +877,7 @@ function Ads({ ads, legacy, reload }) {
   );
 }
 
-function Performance({ orders, ads }) {
+function Performance({ orders, ads, products }) {
   const earliest = orders.length ? orders.map(o => o.placed_at).reduce((a, b) => (a < b ? a : b)) : todayStr();
   const [from, setFrom] = useState(earliest);
   const [to, setTo] = useState(todayStr());
@@ -887,13 +889,16 @@ function Performance({ orders, ads }) {
   const filteredAds = ads.filter(a => a.ad_date >= from && a.ad_date <= to);
   const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
 
-  const collectedInRange = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
-  const grossCollected = collectedInRange.reduce((s, o) => s + Number(o.total), 0);
-  const fees = collectedInRange.reduce((s, o) => s + Number(o.fee || 0), 0);
-  const netCollected = grossCollected - fees;
-  const capital = collectedInRange.reduce((s, o) => s + Number(o.capital), 0);
-  const packaging = collectedInRange.length * 1;
-  const profit = netCollected - capital - packaging - adSpend;
+  function matchProduct(title, variant) {
+    const t = (title || '').trim().toLowerCase();
+    const v = (variant || '').trim().toLowerCase();
+    let hit = products.find(p => p.name.trim().toLowerCase() === t && (p.variant || '').trim().toLowerCase() === v);
+    if (hit) return hit;
+    hit = products.find(p => p.name.trim().toLowerCase() === t);
+    if (hit) return hit;
+    hit = products.find(p => t.includes(p.name.trim().toLowerCase()) || p.name.trim().toLowerCase().includes(t));
+    return hit || null;
+  }
 
   useEffect(() => {
     loadAllOrders();
@@ -909,13 +914,23 @@ function Performance({ orders, ads }) {
       });
       const data = await res.json();
       if (data.error) { setAllErr(data.error); setLoadingAll(false); return; }
-      const loggedNames = new Set(orders.map(o => o.order_name));
-      const classified = data.orders.map(o => ({
-        ...o,
-        status: loggedNames.has(o.name)
-          ? (orders.find(x => x.order_name === o.name)?.kind === 'prepaid' ? 'Collected - Prepaid' : 'Collected - Topspeed')
-          : 'Pending',
-      }));
+
+      const loggedMap = {};
+      orders.forEach(o => { loggedMap[o.order_name] = o; });
+
+      const classified = data.orders.map(o => {
+        const logged = loggedMap[o.name];
+        let capital = 0;
+        (o.lineItems || []).forEach(li => {
+          const p = matchProduct(li.title, li.variant);
+          if (p) capital += li.quantity * p.cost;
+        });
+        let status, fee, isReal;
+        if (logged && logged.kind === 'prepaid') { status = 'Collected - Prepaid'; fee = 0; isReal = true; capital = Number(logged.capital); }
+        else if (logged) { status = 'Collected - Topspeed'; fee = Number(logged.fee || 0); isReal = true; capital = Number(logged.capital); }
+        else { status = 'Pending'; fee = 3.5; isReal = false; } // real capital (from real Shopify items), estimated fee only
+        return { ...o, status, capital, fee, isReal };
+      });
       setAllOrders(classified);
     } catch (err) {
       setAllErr(err.message);
@@ -924,8 +939,13 @@ function Performance({ orders, ads }) {
   }
 
   const pending = allOrders ? allOrders.filter(o => o.status === 'Pending') : [];
-  const pendingValue = pending.reduce((s, o) => s + o.total, 0);
   const totalOrderValue = allOrders ? allOrders.reduce((s, o) => s + o.total, 0) : 0;
+  const totalCapital = allOrders ? allOrders.reduce((s, o) => s + o.capital, 0) : 0;
+  const totalFees = allOrders ? allOrders.reduce((s, o) => s + o.fee, 0) : 0;
+  const packaging = allOrders ? allOrders.length * 1 : 0;
+  const netRevenue = totalOrderValue - totalFees;
+  const estimatedProfit = netRevenue - totalCapital - packaging - adSpend;
+  const collectedCount = allOrders ? allOrders.filter(o => o.isReal).length : 0;
 
   return (
     <>
@@ -935,47 +955,51 @@ function Performance({ orders, ads }) {
         <div className="mini" style={{ paddingBottom: 9 }}>By the date each order was PLACED - includes pending orders too</div>
       </div>
 
-      <div className="kpis">
-        <div className="kpi accent"><div className="lbl">Total order value</div><div className="val">{money(totalOrderValue)}</div></div>
-        <div className="kpi warn"><div className="lbl">Pending (not yet collected)</div><div className="val">{money(pendingValue)}</div></div>
-        <div className="kpi warn"><div className="lbl">Ad spend, these days</div><div className="val">{money(adSpend)}</div></div>
-        <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit (collected only)</div><div className="val">{money(profit)}</div></div>
-      </div>
+      {loadingAll && <div className="loading">Checking Shopify...</div>}
+      {allErr && <div className="flag">{allErr}</div>}
 
-      <div className="panel">
-        <h2>Profit for this window <small>only counts orders already collected - {collectedInRange.length} of them</small></h2>
-        <table className="tbl">
-          <tbody>
-            <tr><td>Gross order value (collected)</td><td>{money(grossCollected)}</td></tr>
-            <tr><td>Topspeed delivery fees</td><td className="neg">-{money(fees)}</td></tr>
-            <tr><td><b>Net revenue (cash collected)</b></td><td><b>{money(netCollected)}</b></td></tr>
-            <tr><td>&nbsp;</td><td></td></tr>
-            <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
-            <tr><td>Packaging ({collectedInRange.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
-            <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
-            <tr><td><b>PROFIT</b></td><td><b>{money(profit)}</b></td></tr>
-          </tbody>
-        </table>
-        {pending.length > 0 && (
-          <div className="note" style={{ marginTop: 10 }}>
-            {pending.length} more orders worth {money(pendingValue)} were placed in this window but aren't collected yet - not included above. Log them in Weeks once delivered.
+      {allOrders && (
+        <>
+          <div className="kpis">
+            <div className="kpi accent"><div className="lbl">Total order value</div><div className="val">{money(totalOrderValue)}</div></div>
+            <div className="kpi warn"><div className="lbl">Ad spend, these days</div><div className="val">{money(adSpend)}</div></div>
+            <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(totalCapital + packaging)}</div></div>
+            <div className={`kpi ${estimatedProfit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Real profit here</div><div className="val">{money(estimatedProfit)}</div></div>
           </div>
-        )}
-      </div>
+
+          <div className="panel">
+            <h2>Full picture, this window <small>{allOrders.length} orders - {collectedCount} confirmed, {pending.length} pending</small></h2>
+            <table className="tbl">
+              <tbody>
+                <tr><td>Gross order value (all orders)</td><td>{money(totalOrderValue)}</td></tr>
+                <tr><td>Topspeed delivery fees (real where collected, ~$3.50 estimated for pending)</td><td className="neg">-{money(totalFees)}</td></tr>
+                <tr><td><b>Net revenue</b></td><td><b>{money(netRevenue)}</b></td></tr>
+                <tr><td>&nbsp;</td><td></td></tr>
+                <tr><td>Product capital (real, from actual products sold)</td><td className="neg">-{money(totalCapital)}</td></tr>
+                <tr><td>Packaging ({allOrders.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
+                <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
+                <tr><td><b>REAL PROFIT</b></td><td><b>{money(estimatedProfit)}</b></td></tr>
+              </tbody>
+            </table>
+            <div className="note" style={{ marginTop: 10 }}>
+              Capital is exact for every order, collected or not - real products, real costs. Only the delivery fee for {pending.length} still-pending orders is an estimate (~$3.50/order), since Topspeed hasn't reported the real fee yet.
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="panel">
-        <h2>Orders <small>{loadingAll ? 'checking Shopify...' : allOrders ? `${allOrders.length} total` : ''}</small></h2>
-        {allErr && <div className="flag">{allErr}</div>}
+        <h2>Orders <small>{allOrders ? `${allOrders.length} total` : ''}</small></h2>
         {!showOrders ? (
           <button className="btn ghost2" onClick={() => setShowOrders(true)} disabled={!allOrders}>Show all orders</button>
         ) : (
           <>
             <table className="tbl">
-              <thead><tr><th>Order</th><th>Placed</th><th>Total</th><th>Status</th></tr></thead>
+              <thead><tr><th>Order</th><th>Placed</th><th>Total</th><th>Capital</th><th>Status</th></tr></thead>
               <tbody>
                 {allOrders && [...allOrders].sort((a, b) => (a.status === 'Pending' ? -1 : 1) - (b.status === 'Pending' ? -1 : 1)).map(o => (
                   <tr key={o.name}>
-                    <td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.total)}</td>
+                    <td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.total)}</td><td>{money(o.capital)}</td>
                     <td style={{ color: o.status === 'Pending' ? 'var(--bad)' : 'var(--good)', fontWeight: 700 }}>{o.status}</td>
                   </tr>
                 ))}
