@@ -146,17 +146,18 @@ export default function Home() {
     const capitalSpent = sumFund('capital', 'spend');
     const employeeCost = funds.filter(f => f.fund === 'employee').reduce((s, f) => s + Number(f.amount), 0);
     const otherCost = funds.filter(f => f.fund === 'other').reduce((s, f) => s + Number(f.amount), 0);
+    const injections = funds.filter(f => f.fund === 'injection').reduce((s, f) => s + Number(f.amount), 0);
 
     const packagingStillNeeded = packagingAccrued + packagingReserved - packagingSpent;
     const capitalStillNeeded = capitalAccrued + capitalReserved - capitalSpent;
 
-    const cashIn = topspeedCash;
+    const cashIn = topspeedCash + injections;
     const cashOut = adsTotal + employeeCost + otherCost + packagingSpent + capitalSpent;
     const cashOnHand = cashIn - cashOut;
     const net = cashOnHand - capitalStillNeeded - packagingStillNeeded;
 
     return {
-      topspeedCash, capitalAccrued, packagingAccrued, packagingReserved, packagingSpent,
+      topspeedCash, injections, capitalAccrued, packagingAccrued, packagingReserved, packagingSpent,
       capitalReserved, capitalSpent, packagingStillNeeded, capitalStillNeeded,
       employeeCost, otherCost, adsTotal, deliveredTotal, cancelledTotal, revenueTotal,
       cashIn, cashOut, cashOnHand, net,
@@ -264,6 +265,7 @@ function Dashboard({ totals: c, settings, weeksCount }) {
         <table className="tbl">
           <tbody>
             <tr><td>Revenue (Topspeed + prepaid, all-time)</td><td>{money(c.revenueTotal)}</td></tr>
+            <tr><td>Your own money added</td><td>{money(c.injections)}</td></tr>
             <tr><td>Ads spent, all-time</td><td className="neg">-{money(c.adsTotal)}</td></tr>
             <tr><td>Employee wages</td><td className="neg">-{money(c.employeeCost)}</td></tr>
             <tr><td>Other expenses</td><td className="neg">-{money(c.otherCost)}</td></tr>
@@ -643,11 +645,12 @@ function Funds({ funds, totals, reload }) {
     capital: { title: 'Capital (stock)', accrued: totals.capitalAccrued, reserved: totals.capitalReserved, spent: totals.capitalSpent, needed: totals.capitalStillNeeded, hasReserve: true },
     employee: { title: 'Employee wages', spent: totals.employeeCost, hasReserve: false },
     other: { title: 'Other expenses', spent: totals.otherCost, hasReserve: false },
+    injection: { title: 'Your own money added', spent: totals.injections, hasReserve: false, isIncome: true },
   };
 
   async function addEntry() {
     if (!amount) return;
-    const finalType = fundList[fund].hasReserve ? type : 'spend';
+    const finalType = fund === 'injection' ? 'add' : (fundList[fund].hasReserve ? type : 'spend');
     const finalLabel = label || `${fundList[fund].title}, ${date}`;
     const { error } = await supabase.from('fund_entries').insert({
       fund, type: finalType, label: finalLabel, amount: Number(amount), entry_date: date,
@@ -678,6 +681,7 @@ function Funds({ funds, totals, reload }) {
               <option value="capital">Capital (stock)</option>
               <option value="employee">Employee wages</option>
               <option value="other">Other expense</option>
+              <option value="injection">Your own money added</option>
             </select>
           </div>
           {fundList[fund].hasReserve && (
