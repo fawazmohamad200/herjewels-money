@@ -939,6 +939,9 @@ function Performance({ orders, ads, products }) {
   }
 
   const pending = allOrders ? allOrders.filter(o => o.status === 'Pending') : [];
+  const collected = allOrders ? allOrders.filter(o => o.status !== 'Pending') : [];
+  const collectedValue = collected.reduce((s, o) => s + o.total, 0);
+  const pendingValue = pending.reduce((s, o) => s + o.total, 0);
   const totalOrderValue = allOrders ? allOrders.reduce((s, o) => s + o.total, 0) : 0;
   const totalCapital = allOrders ? allOrders.reduce((s, o) => s + o.capital, 0) : 0;
   const totalFees = allOrders ? allOrders.reduce((s, o) => s + o.fee, 0) : 0;
@@ -962,8 +965,9 @@ function Performance({ orders, ads, products }) {
         <>
           <div className="kpis">
             <div className="kpi accent"><div className="lbl">Total order value</div><div className="val">{money(totalOrderValue)}</div></div>
+            <div className="kpi good"><div className="lbl">Collected ({collected.length})</div><div className="val">{money(collectedValue)}</div></div>
+            <div className="kpi warn"><div className="lbl">Pending ({pending.length})</div><div className="val">{money(pendingValue)}</div></div>
             <div className="kpi warn"><div className="lbl">Ad spend, these days</div><div className="val">{money(adSpend)}</div></div>
-            <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(totalCapital + packaging)}</div></div>
             <div className={`kpi ${estimatedProfit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Real profit here</div><div className="val">{money(estimatedProfit)}</div></div>
           </div>
 
