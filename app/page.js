@@ -191,6 +191,8 @@ export default function Home() {
     );
   }
 
+  const TAB_LIST = ['dashboard', 'weeks', 'funds', 'performance', 'products', 'ads', 'settings'];
+
   return (
     <div>
       {dbError && <div className="banner">⚠ {dbError}</div>}
@@ -199,8 +201,8 @@ export default function Home() {
           <img src="https://cdn.shopify.com/s/files/1/0823/5171/8617/files/herjewels-logo.jpg?v=1784118069" alt="HerJewels" className="brand-mark" style={{objectFit:'cover'}}/>
           <div><h1>HerJewels</h1><span>Money & Capital Tracker</span></div>
         </div>
-        <div className="tabs">
-          {['dashboard', 'weeks', 'funds', 'performance', 'products', 'ads', 'settings'].map(t => (
+        <div className="tabs desktop-tabs">
+          {TAB_LIST.map(t => (
             <div key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
             </div>
@@ -220,6 +222,13 @@ export default function Home() {
           </>
         )}
         <div className="signature mono">shared with your employee &middot; saves to your own database</div>
+      </div>
+      <div className="bottom-nav">
+        {TAB_LIST.map(t => (
+          <div key={t} className={`bottom-nav-item ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
+            {t[0].toUpperCase() + t.slice(1)}
+          </div>
+        ))}
       </div>
     </div>
   );
