@@ -154,7 +154,9 @@ export default function Home() {
     const cashIn = topspeedCash + injections;
     const cashOut = adsTotal + employeeCost + otherCost + packagingSpent + capitalSpent;
     const cashOnHand = cashIn - cashOut;
-    const net = cashOnHand - capitalStillNeeded - packagingStillNeeded;
+    // A surplus (already ahead on stock/packaging) should never ADD to spendable cash -
+    // it just means you owe $0 right now, not that you have extra money.
+    const net = cashOnHand - Math.max(0, capitalStillNeeded) - Math.max(0, packagingStillNeeded);
 
     return {
       topspeedCash, injections, capitalAccrued, packagingAccrued, packagingReserved, packagingSpent,
