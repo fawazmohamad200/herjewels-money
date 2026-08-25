@@ -39,7 +39,7 @@ export async function POST(request) {
     // or early-morning orders get cut off into the previous day by mistake.
     const createdMin = `${fromDate}T00:00:00+03:00`;
     const createdMax = `${toDate}T23:59:59+03:00`;
-    let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(createdMin)}&created_at_max=${encodeURIComponent(createdMax)}&limit=250&fields=id,name,total_price,created_at,financial_status,fulfillment_status`;
+    let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(createdMin)}&created_at_max=${encodeURIComponent(createdMax)}&limit=250&fields=id,name,total_price,created_at,financial_status,fulfillment_status,line_items`;
 
     const allOrders = [];
     let guard = 0;
@@ -58,6 +58,7 @@ export async function POST(request) {
           name: o.name, total: parseFloat(o.total_price),
           placedAt: (o.created_at || '').slice(0, 10),
           financialStatus: o.financial_status, fulfillmentStatus: o.fulfillment_status,
+          lineItems: (o.line_items || []).map(li => ({ title: li.title, variant: li.variant_title || '', quantity: li.quantity })),
         });
       });
       const link = res.headers.get('link') || res.headers.get('Link');
