@@ -28,10 +28,8 @@ export default function Home() {
   const [legacy, setLegacy] = useState([]);
   const [ads, setAds] = useState([]);
   const [orders, setOrders] = useState([]); // individual real orders, for the Performance report
-  const [settings, setSettings] = useState({ employee: 0, stock: 0, other: 0, bank: 0 });
-
-  const [fromDate, setFromDate] = useState('2026-01-01');
-  const [toDate, setToDate] = useState(todayStr());
+  const [funds, setFunds] = useState([]); // packaging/capital/employee/other ledger entries
+  const [settings, setSettings] = useState({ bank: 0 });
 
   useEffect(() => {
     if (unlocked) loadAll();
@@ -43,7 +41,7 @@ export default function Home() {
     try {
       const [{ data: prod, error: e1 }, { data: wk, error: e2 }, { data: items, error: e3 },
              { data: lg, error: e4 }, { data: adRows, error: e5 }, { data: st, error: e6 },
-             { data: ordRows, error: e7 }] =
+             { data: ordRows, error: e7 }, { data: fundRows, error: e8 }] =
         await Promise.all([
           supabase.from('products').select('*').order('name'),
           supabase.from('weeks').select('*').order('week_date', { ascending: false }),
@@ -52,8 +50,9 @@ export default function Home() {
           supabase.from('ads').select('*').order('ad_date', { ascending: false }),
           supabase.from('settings').select('*').eq('id', 1).single(),
           supabase.from('orders').select('*').order('placed_at', { ascending: false }),
+          supabase.from('fund_entries').select('*').order('entry_date', { ascending: false }),
         ]);
-      if (e1 || e2 || e3 || e4 || e5 || e6 || e7) throw (e1 || e2 || e3 || e4 || e5 || e6 || e7);
+      if (e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8) throw (e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8);
 
       const weeksWithItems = (wk || []).map(w => ({
         ...w,
@@ -65,14 +64,8 @@ export default function Home() {
       setLegacy(lg || []);
       setAds(adRows || []);
       setOrders(ordRows || []);
-      setSettings(st || { employee: 0, stock: 0, other: 0, bank: 0 });
-
-      // default date range: earliest known date to today
-      const allDates = weeksWithItems.map(w => w.week_date).filter(Boolean);
-      if (allDates.length) {
-        const min = allDates.reduce((a, b) => (a < b ? a : b));
-        setFromDate(min);
-      }
+      setFunds(fundRows || []);
+      setSettings(st || { bank: 0 });
     } catch (err) {
       console.error(err);
       setDbError('Could not reach the database. Check your internet connection, or the app may not be set up yet.');
@@ -123,40 +116,52 @@ export default function Home() {
     };
   };
 
-  const inRange = (dateStr) => {
-    if (!dateStr) return true;
-    return dateStr >= fromDate && dateStr <= toDate;
-  };
-
+  // Dashboard is always ALL-TIME, no dates - this is your "what do I actually have right now" view.
   const totals = useMemo(() => {
-    let topspeedCash = 0, capitalTotal = 0, packagingTotal = 0, deliveredTotal = 0, cancelledTotal = 0, revenueTotal = 0;
+    let topspeedCash = 0, capitalAccrued = 0, packagingAccrued = 0, deliveredTotal = 0, cancelledTotal = 0, revenueTotal = 0;
     weeks.forEach(w => {
-      if (!inRange(w.week_date)) return;
       const t = weekTotals(w);
       topspeedCash += t.cash;
-      capitalTotal += t.capital;
-      packagingTotal += t.packaging;
+      capitalAccrued += t.capital;
+      packagingAccrued += t.packaging;
       deliveredTotal += Number(w.delivered) || 0;
       cancelledTotal += Number(w.cancelled) || 0;
       revenueTotal += t.revenue;
     });
     legacy.forEach(b => {
       topspeedCash += Number(b.revenue) || 0;
-      capitalTotal += Number(b.capital) || 0;
+      capitalAccrued += Number(b.capital) || 0;
       deliveredTotal += Number(b.delivered) || 0;
       cancelledTotal += Number(b.cancelled) || 0;
       revenueTotal += Number(b.revenue) || 0;
     });
     let adsTotal = 0;
-    ads.forEach(a => { if (inRange(a.ad_date)) adsTotal += Number(a.amount) || 0; });
+    ads.forEach(a => { adsTotal += Number(a.amount) || 0; });
     legacy.forEach(b => { adsTotal += Number(b.ads) || 0; });
 
+    const sumFund = (fund, type) => funds.filter(f => f.fund === fund && f.type === type).reduce((s, f) => s + Number(f.amount), 0);
+    const packagingReserved = sumFund('packaging', 'reserve');
+    const packagingSpent = sumFund('packaging', 'spend');
+    const capitalReserved = sumFund('capital', 'reserve');
+    const capitalSpent = sumFund('capital', 'spend');
+    const employeeCost = funds.filter(f => f.fund === 'employee').reduce((s, f) => s + Number(f.amount), 0);
+    const otherCost = funds.filter(f => f.fund === 'other').reduce((s, f) => s + Number(f.amount), 0);
+
+    const packagingStillNeeded = packagingAccrued + packagingReserved - packagingSpent;
+    const capitalStillNeeded = capitalAccrued + capitalReserved - capitalSpent;
+
     const cashIn = topspeedCash;
-    const cashOut = adsTotal + (Number(settings.employee) || 0) + (Number(settings.stock) || 0) + (Number(settings.other) || 0);
+    const cashOut = adsTotal + employeeCost + otherCost + packagingSpent + capitalSpent;
     const cashOnHand = cashIn - cashOut;
-    const net = cashOnHand - capitalTotal - packagingTotal;
-    return { topspeedCash, capitalTotal, packagingTotal, adsTotal, deliveredTotal, cancelledTotal, revenueTotal, cashIn, cashOut, cashOnHand, net };
-  }, [weeks, legacy, ads, settings, fromDate, toDate]);
+    const net = cashOnHand - capitalStillNeeded - packagingStillNeeded;
+
+    return {
+      topspeedCash, capitalAccrued, packagingAccrued, packagingReserved, packagingSpent,
+      capitalReserved, capitalSpent, packagingStillNeeded, capitalStillNeeded,
+      employeeCost, otherCost, adsTotal, deliveredTotal, cancelledTotal, revenueTotal,
+      cashIn, cashOut, cashOnHand, net,
+    };
+  }, [weeks, legacy, ads, funds]);
 
   if (!unlocked) {
     const dots = Array.from({ length: 4 }).map((_, i) => (
@@ -192,7 +197,7 @@ export default function Home() {
           <div><h1>HerJewels</h1><span>Money & Capital Tracker</span></div>
         </div>
         <div className="tabs">
-          {['dashboard', 'weeks', 'performance', 'products', 'ads', 'settings'].map(t => (
+          {['dashboard', 'weeks', 'funds', 'performance', 'products', 'ads', 'settings'].map(t => (
             <div key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
             </div>
@@ -202,8 +207,9 @@ export default function Home() {
       <div className="body">
         {loading ? <div className="loading">Loading...</div> : (
           <>
-            {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} fromDate={fromDate} toDate={toDate} setFromDate={setFromDate} setToDate={setToDate} weeksCount={weeks.length} />}
+            {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} weeksCount={weeks.length} />}
             {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'funds' && <Funds funds={funds} totals={totals} reload={loadAll} />}
             {tab === 'performance' && <Performance orders={orders} ads={ads} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
@@ -216,59 +222,55 @@ export default function Home() {
   );
 }
 
-function Dashboard({ totals: c, settings, fromDate, toDate, setFromDate, setToDate, weeksCount }) {
+function Dashboard({ totals: c, settings, weeksCount }) {
   const diff = (Number(settings.bank) || 0) - c.cashOnHand;
   const diffOk = Math.abs(diff) < 1;
-
-  function setPreset(days) {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(end.getDate() - (days - 1));
-    setFromDate(start.toISOString().slice(0, 10));
-    setToDate(end.toISOString().slice(0, 10));
-  }
-  function setLastWeek() {
-    const end = new Date();
-    end.setDate(end.getDate() - 7);
-    const start = new Date();
-    start.setDate(end.getDate() - 6);
-    setFromDate(start.toISOString().slice(0, 10));
-    setToDate(end.toISOString().slice(0, 10));
-  }
-  function setAllTime() {
-    setFromDate('2020-01-01');
-    setToDate(todayStr());
-  }
-
   return (
     <>
-      <div className="daterange" style={{ flexWrap: 'wrap' }}>
-        <div className="field"><label>From</label><input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} /></div>
-        <div className="field"><label>To</label><input type="date" value={toDate} onChange={e => setToDate(e.target.value)} /></div>
-        <button className="btn ghost2" onClick={() => setPreset(7)}>This week</button>
-        <button className="btn ghost2" onClick={setLastWeek}>Last week</button>
-        <button className="btn ghost2" onClick={setAllTime}>All time</button>
-      </div>
       <div className="kpis">
         <div className="kpi accent"><div className="lbl">Cash In</div><div className="val">{money(c.cashIn)}</div></div>
         <div className="kpi"><div className="lbl">Cash Out</div><div className="val">{money(c.cashOut)}</div></div>
         <div className="kpi good"><div className="lbl">Cash On Hand</div><div className="val">{money(c.cashOnHand)}</div></div>
-        <div className="kpi warn"><div className="lbl">Capital (stock)</div><div className="val">{money(c.capitalTotal)}</div></div>
-        <div className="kpi warn"><div className="lbl">Packaging to rebuy</div><div className="val">{money(c.packagingTotal)}</div></div>
-        <div className="kpi good"><div className="lbl">Net - spendable</div><div className="val">{money(c.net)}</div></div>
+        <div className="kpi good"><div className="lbl">Net - truly spendable</div><div className="val">{money(c.net)}</div></div>
       </div>
+
       <div className="panel">
-        <h2>Business in this range <small>{c.deliveredTotal} delivered &middot; {c.cancelledTotal} cancelled &middot; {weeksCount} weeks logged total</small></h2>
+        <h2>Capital <small>money you need to rebuy stock</small></h2>
         <table className="tbl">
           <tbody>
-            <tr><td>Revenue (COD + prepaid, already net of Topspeed fees)</td><td>{money(c.revenueTotal)}</td></tr>
-            <tr><td>Cash Topspeed + prepaid handed you</td><td>{money(c.topspeedCash)}</td></tr>
-            <tr><td>Ads spent</td><td className="neg">-{money(c.adsTotal)}</td></tr>
-            <tr><td>Product capital tied up in stock</td><td className="neg">-{money(c.capitalTotal)}</td></tr>
-            <tr><td>Packaging cost to set aside for rebuying supplies</td><td className="neg">-{money(c.packagingTotal)}</td></tr>
+            <tr><td>Accrued (from real orders, all-time)</td><td>{money(c.capitalAccrued)}</td></tr>
+            <tr><td>Extra you've reserved</td><td>{money(c.capitalReserved)}</td></tr>
+            <tr><td>Already spent on stock</td><td className="neg">-{money(c.capitalSpent)}</td></tr>
+            <tr><td><b>STILL NEEDED</b></td><td><b>{money(c.capitalStillNeeded)}</b></td></tr>
           </tbody>
         </table>
       </div>
+
+      <div className="panel">
+        <h2>Packaging <small>money you need to rebuy boxes/supplies</small></h2>
+        <table className="tbl">
+          <tbody>
+            <tr><td>Accrued (from real orders, all-time)</td><td>{money(c.packagingAccrued)}</td></tr>
+            <tr><td>Extra you've reserved</td><td>{money(c.packagingReserved)}</td></tr>
+            <tr><td>Already spent on packaging</td><td className="neg">-{money(c.packagingSpent)}</td></tr>
+            <tr><td><b>STILL NEEDED</b></td><td><b>{money(c.packagingStillNeeded)}</b></td></tr>
+          </tbody>
+        </table>
+        <div className="note">Log purchases in the Funds tab whenever you actually buy stock or packaging - this updates automatically.</div>
+      </div>
+
+      <div className="panel">
+        <h2>Business, all-time <small>{c.deliveredTotal} delivered &middot; {c.cancelledTotal} cancelled &middot; {weeksCount} weeks logged</small></h2>
+        <table className="tbl">
+          <tbody>
+            <tr><td>Revenue (Topspeed + prepaid, all-time)</td><td>{money(c.revenueTotal)}</td></tr>
+            <tr><td>Ads spent, all-time</td><td className="neg">-{money(c.adsTotal)}</td></tr>
+            <tr><td>Employee wages</td><td className="neg">-{money(c.employeeCost)}</td></tr>
+            <tr><td>Other expenses</td><td className="neg">-{money(c.otherCost)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
       <div className="panel">
         <h2>Bank check</h2>
         <table className="tbl">
@@ -490,14 +492,14 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       <h2>Weeks <small>one entry per Topspeed paper - COD and already-paid orders together, exactly like the real paper</small></h2>
       <table className="tbl">
         <thead>
-          <tr><th>Week</th><th>Delivered</th><th>Cancelled</th><th>Revenue</th><th>Cash</th><th>Capital</th><th>Packaging</th><th></th></tr>
+          <tr><th>Week</th><th>Delivered</th><th>Cancelled</th><th>Revenue</th><th>Cash - Topspeed</th><th>Cash - Prepaid</th><th>Capital</th><th>Packaging</th><th></th></tr>
         </thead>
         <tbody>
           {legacy.map(b => (
             <tr key={'lg' + b.id} style={{ opacity: .65 }}>
               <td>{b.label} <span className="mini">(legacy)</span></td>
               <td>{b.delivered}</td><td>{b.cancelled}</td>
-              <td>{money(b.revenue)}</td><td>{money(b.revenue)}</td><td>{money(b.capital)}</td><td>-</td><td></td>
+              <td>{money(b.revenue)}</td><td>{money(b.revenue)}</td><td>$0.00</td><td>{money(b.capital)}</td><td>-</td><td></td>
             </tr>
           ))}
           {weeks.map(w => {
@@ -512,14 +514,14 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                     {w.label} <span className="mini">({w.week_date})</span>
                   </td>
                   <td>{w.delivered}</td><td>{w.cancelled}</td>
-                  <td>{money(t.revenue)}</td><td>{money(t.cash)}</td><td>{money(t.capital)}</td><td>{money(t.packaging)}</td>
+                  <td>{money(t.revenue)}</td><td>{money(t.cashTopspeed)}</td><td>{money(t.cashPaid)}</td><td>{money(t.capital)}</td><td>{money(t.packaging)}</td>
                   <td>
                     <button className="expand" onClick={() => startEditWeek(w)}>Edit</button>
                     <button className="del" onClick={() => deleteWeek(w.id)}>✕</button>
                   </td>
                 </tr>
                 {isOpen && (
-                  <tr><td colSpan={8}>
+                  <tr><td colSpan={9}>
                     <div className="week-detail">
                       {nonZero.length ? nonZero.map((it, idx) => {
                         const p = products.find(pp => pp.id === it.product_id);
@@ -626,6 +628,100 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
         </div>
       )}
     </div>
+  );
+}
+
+function Funds({ funds, totals, reload }) {
+  const [fund, setFund] = useState('packaging');
+  const [type, setType] = useState('spend');
+  const [label, setLabel] = useState('');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(todayStr());
+
+  const fundList = {
+    packaging: { title: 'Packaging', accrued: totals.packagingAccrued, reserved: totals.packagingReserved, spent: totals.packagingSpent, needed: totals.packagingStillNeeded, hasReserve: true },
+    capital: { title: 'Capital (stock)', accrued: totals.capitalAccrued, reserved: totals.capitalReserved, spent: totals.capitalSpent, needed: totals.capitalStillNeeded, hasReserve: true },
+    employee: { title: 'Employee wages', spent: totals.employeeCost, hasReserve: false },
+    other: { title: 'Other expenses', spent: totals.otherCost, hasReserve: false },
+  };
+
+  async function addEntry() {
+    if (!amount) return;
+    const finalType = fundList[fund].hasReserve ? type : 'spend';
+    const finalLabel = label || `${fundList[fund].title}, ${date}`;
+    const { error } = await supabase.from('fund_entries').insert({
+      fund, type: finalType, label: finalLabel, amount: Number(amount), entry_date: date,
+    });
+    if (error) { alert('Could not add: ' + error.message); return; }
+    setLabel(''); setAmount('');
+    await reload();
+  }
+  async function deleteEntry(id) {
+    await supabase.from('fund_entries').delete().eq('id', id);
+    await reload();
+  }
+
+  return (
+    <>
+      <div className="panel">
+        <h2>Funds <small>log a purchase whenever you spend on stock or packaging - or set money aside ahead of time</small></h2>
+        <div className="kpis" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 18 }}>
+          <div className="kpi warn"><div className="lbl">Capital still needed</div><div className="val">{money(totals.capitalStillNeeded)}</div></div>
+          <div className="kpi warn"><div className="lbl">Packaging still needed</div><div className="val">{money(totals.packagingStillNeeded)}</div></div>
+        </div>
+
+        <div className="newweek-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr auto' }}>
+          <div className="field">
+            <label>Fund</label>
+            <select value={fund} onChange={e => setFund(e.target.value)} style={{width:'100%',padding:'8px 9px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,background:'#fbfaf6'}}>
+              <option value="packaging">Packaging</option>
+              <option value="capital">Capital (stock)</option>
+              <option value="employee">Employee wages</option>
+              <option value="other">Other expense</option>
+            </select>
+          </div>
+          {fundList[fund].hasReserve && (
+            <div className="field">
+              <label>Type</label>
+              <select value={type} onChange={e => setType(e.target.value)} style={{width:'100%',padding:'8px 9px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,background:'#fbfaf6'}}>
+                <option value="spend">Spent (bought it)</option>
+                <option value="reserve">Reserve (set aside)</option>
+              </select>
+            </div>
+          )}
+          <div className="field"><label>Note</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="optional" /></div>
+          <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+          <div className="field"><label>Amount $</label><input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} /></div>
+          <button className="btn gold" onClick={addEntry}>Add</button>
+        </div>
+      </div>
+
+      {Object.entries(fundList).map(([key, info]) => {
+        const entries = funds.filter(f => f.fund === key);
+        if (!entries.length && info.hasReserve === false) return null;
+        return (
+          <div className="panel" key={key}>
+            <h2>{info.title}
+              {info.hasReserve && <small>accrued {money(info.accrued)} + reserved {money(info.reserved)} - spent {money(info.spent)} = needed {money(info.needed)}</small>}
+            </h2>
+            <table className="tbl">
+              <thead><tr><th>Date</th><th>Note</th>{info.hasReserve && <th>Type</th>}<th>Amount</th><th></th></tr></thead>
+              <tbody>
+                {entries.length === 0 && <tr><td colSpan={info.hasReserve ? 4 : 3} className="mini">No entries yet.</td></tr>}
+                {entries.map(f => (
+                  <tr key={f.id}>
+                    <td>{f.entry_date}</td><td>{f.label}</td>
+                    {info.hasReserve && <td>{f.type === 'reserve' ? 'Reserved' : 'Spent'}</td>}
+                    <td>{money(f.amount)}</td>
+                    <td><button className="del" onClick={() => deleteEntry(f.id)}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -768,8 +864,7 @@ function Performance({ orders, ads }) {
   const earliest = orders.length ? orders.map(o => o.placed_at).reduce((a, b) => (a < b ? a : b)) : todayStr();
   const [from, setFrom] = useState(earliest);
   const [to, setTo] = useState(todayStr());
-  const [view, setView] = useState('collected'); // 'collected' | 'all'
-  const [adsExpanded, setAdsExpanded] = useState(false);
+  const [showOrders, setShowOrders] = useState(false);
   const [allOrders, setAllOrders] = useState(null);
   const [loadingAll, setLoadingAll] = useState(false);
   const [allErr, setAllErr] = useState('');
@@ -777,16 +872,18 @@ function Performance({ orders, ads }) {
   const filteredAds = ads.filter(a => a.ad_date >= from && a.ad_date <= to);
   const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
 
-  const filteredOrders = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
-  const grossRevenue = filteredOrders.reduce((s, o) => s + Number(o.total), 0);
-  const fees = filteredOrders.reduce((s, o) => s + Number(o.fee || 0), 0);
-  const revenue = grossRevenue - fees; // net cash actually collected - same definition as Weeks/Prepaid/Dashboard
-  const capital = filteredOrders.reduce((s, o) => s + Number(o.capital), 0);
-  const packaging = filteredOrders.length * 1;
+  const collectedInRange = orders.filter(o => o.placed_at >= from && o.placed_at <= to);
+  const grossCollected = collectedInRange.reduce((s, o) => s + Number(o.total), 0);
+  const fees = collectedInRange.reduce((s, o) => s + Number(o.fee || 0), 0);
+  const netCollected = grossCollected - fees;
+  const capital = collectedInRange.reduce((s, o) => s + Number(o.capital), 0);
+  const packaging = collectedInRange.length * 1;
+  const profit = netCollected - capital - packaging - adSpend;
 
-  const profit = revenue - capital - packaging - adSpend;
-  const codCount = filteredOrders.filter(o => o.kind === 'topspeed').length;
-  const prepaidCount = filteredOrders.filter(o => o.kind === 'prepaid').length;
+  useEffect(() => {
+    loadAllOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to]);
 
   async function loadAllOrders() {
     setLoadingAll(true); setAllErr(''); setAllOrders(null);
@@ -811,106 +908,80 @@ function Performance({ orders, ads }) {
     setLoadingAll(false);
   }
 
-  function switchToAll() {
-    setView('all');
-    if (!allOrders) loadAllOrders();
-  }
-
   const pending = allOrders ? allOrders.filter(o => o.status === 'Pending') : [];
-  const pendingRevenue = pending.reduce((s, o) => s + o.total, 0);
-  const allTotal = allOrders ? allOrders.reduce((s, o) => s + o.total, 0) : 0;
+  const pendingValue = pending.reduce((s, o) => s + o.total, 0);
+  const totalOrderValue = allOrders ? allOrders.reduce((s, o) => s + o.total, 0) : 0;
 
   return (
     <>
       <div className="daterange">
-        <div className="field"><label>Orders placed from</label><input type="date" value={from} onChange={e => { setFrom(e.target.value); setAllOrders(null); }} style={{ border: '2px solid var(--gold)' }} /></div>
-        <div className="field"><label>to</label><input type="date" value={to} onChange={e => { setTo(e.target.value); setAllOrders(null); }} style={{ border: '2px solid var(--gold)' }} /></div>
-        <button className={`btn ${view === 'collected' ? 'gold' : 'ghost2'}`} onClick={() => setView('collected')}>Collected only</button>
-        <button className={`btn ${view === 'all' ? 'gold' : 'ghost2'}`} onClick={switchToAll}>All orders (incl. pending)</button>
+        <div className="field"><label>Orders placed from</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
+        <div className="field"><label>to</label><input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
+        <div className="mini" style={{ paddingBottom: 9 }}>By the date each order was PLACED - includes pending orders too</div>
       </div>
 
-      {view === 'collected' && (
-        <>
-          <div className="mini" style={{ marginTop: -10, marginBottom: 14 }}>Filters by the date each order was PLACED, not when Topspeed paid for it</div>
-          <div className="kpis">
-            <div className="kpi accent"><div className="lbl">Revenue</div><div className="val">{money(revenue)}</div></div>
-            <div className="kpi warn"><div className="lbl">Ad spend</div><div className="val">{money(adSpend)}</div></div>
-            <div className="kpi warn"><div className="lbl">Capital + packaging</div><div className="val">{money(capital + packaging)}</div></div>
-            <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit</div><div className="val">{money(profit)}</div></div>
-          </div>
+      <div className="kpis">
+        <div className="kpi accent"><div className="lbl">Total order value</div><div className="val">{money(totalOrderValue)}</div></div>
+        <div className="kpi warn"><div className="lbl">Pending (not yet collected)</div><div className="val">{money(pendingValue)}</div></div>
+        <div className="kpi warn"><div className="lbl">Ad spend, these days</div><div className="val">{money(adSpend)}</div></div>
+        <div className={`kpi ${profit >= 0 ? 'good' : 'bad'}`}><div className="lbl">Profit (collected only)</div><div className="val">{money(profit)}</div></div>
+      </div>
 
-          <div className="panel">
-            <h2>Orders placed in this window <small>{filteredOrders.length} orders - {codCount} via Topspeed, {prepaidCount} prepaid</small></h2>
+      <div className="panel">
+        <h2>Profit for this window <small>only counts orders already collected - {collectedInRange.length} of them</small></h2>
+        <table className="tbl">
+          <tbody>
+            <tr><td>Gross order value (collected)</td><td>{money(grossCollected)}</td></tr>
+            <tr><td>Topspeed delivery fees</td><td className="neg">-{money(fees)}</td></tr>
+            <tr><td><b>Net revenue (cash collected)</b></td><td><b>{money(netCollected)}</b></td></tr>
+            <tr><td>&nbsp;</td><td></td></tr>
+            <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
+            <tr><td>Packaging ({collectedInRange.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
+            <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
+            <tr><td><b>PROFIT</b></td><td><b>{money(profit)}</b></td></tr>
+          </tbody>
+        </table>
+        {pending.length > 0 && (
+          <div className="note" style={{ marginTop: 10 }}>
+            {pending.length} more orders worth {money(pendingValue)} were placed in this window but aren't collected yet - not included above. Log them in Weeks once delivered.
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>Orders <small>{loadingAll ? 'checking Shopify...' : allOrders ? `${allOrders.length} total` : ''}</small></h2>
+        {allErr && <div className="flag">{allErr}</div>}
+        {!showOrders ? (
+          <button className="btn ghost2" onClick={() => setShowOrders(true)} disabled={!allOrders}>Show all orders</button>
+        ) : (
+          <>
             <table className="tbl">
+              <thead><tr><th>Order</th><th>Placed</th><th>Total</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td>Gross order value</td><td>{money(grossRevenue)}</td></tr>
-                <tr><td>Topspeed delivery fees</td><td className="neg">-{money(fees)}</td></tr>
-                <tr><td><b>Net revenue (cash collected)</b></td><td><b>{money(revenue)}</b></td></tr>
-                <tr><td>&nbsp;</td><td></td></tr>
-                <tr><td>Product capital</td><td className="neg">-{money(capital)}</td></tr>
-                <tr><td>Packaging ({filteredOrders.length} x $1)</td><td className="neg">-{money(packaging)}</td></tr>
-                <tr><td>Ad spend</td><td className="neg">-{money(adSpend)}</td></tr>
-                <tr><td><b>PROFIT</b></td><td><b>{money(profit)}</b></td></tr>
+                {allOrders && [...allOrders].sort((a, b) => (a.status === 'Pending' ? -1 : 1) - (b.status === 'Pending' ? -1 : 1)).map(o => (
+                  <tr key={o.name}>
+                    <td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.total)}</td>
+                    <td style={{ color: o.status === 'Pending' ? 'var(--bad)' : 'var(--good)', fontWeight: 700 }}>{o.status}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
-          </div>
+            <button className="btn ghost2" style={{ marginTop: 10 }} onClick={() => setShowOrders(false)}>Hide</button>
+          </>
+        )}
+      </div>
 
-          <div className="panel">
-            <h2>Ad spend, this window <small>{filteredAds.length} days logged</small></h2>
-            {!adsExpanded ? (
-              <button className="btn ghost2" onClick={() => setAdsExpanded(true)}>Show all {filteredAds.length} days - {money(adSpend)} total</button>
-            ) : (
-              <>
-                <table className="tbl">
-                  <tbody>
-                    {filteredAds.length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
-                    {filteredAds.map(a => (
-                      <tr key={a.id}><td>{a.ad_date} <span className="mini">({a.label})</span></td><td>{money(a.amount)}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-                <button className="btn ghost2" style={{ marginTop: 10 }} onClick={() => setAdsExpanded(false)}>Hide</button>
-              </>
-            )}
-          </div>
-
-          <div className="note" style={{ marginBottom: 8 }}>
-            Only orders already looked up in Weeks or Prepaid appear here - meaning revenue shown is real, collected money, not a guess about pending orders.
-          </div>
-        </>
-      )}
-
-      {view === 'all' && (
-        <>
-          <div className="mini" style={{ marginTop: -10, marginBottom: 14 }}>Every real Shopify order placed in this window, whether logged in the app yet or not</div>
-          {loadingAll && <div className="loading">Checking Shopify...</div>}
-          {allErr && <div className="flag">{allErr}</div>}
-          {allOrders && (
-            <>
-              <div className="kpis">
-                <div className="kpi accent"><div className="lbl">All orders</div><div className="val">{allOrders.length}</div></div>
-                <div className="kpi warn"><div className="lbl">Pending (not yet logged)</div><div className="val">{pending.length}</div></div>
-                <div className="kpi warn"><div className="lbl">Pending value</div><div className="val">{money(pendingRevenue)}</div></div>
-                <div className="kpi good"><div className="lbl">Total order value</div><div className="val">{money(allTotal)}</div></div>
-              </div>
-              <div className="panel">
-                <h2>Orders <small>sorted so Pending shows first</small></h2>
-                <table className="tbl">
-                  <thead><tr><th>Order</th><th>Placed</th><th>Total</th><th>Status</th></tr></thead>
-                  <tbody>
-                    {[...allOrders].sort((a, b) => (a.status === 'Pending' ? -1 : 1) - (b.status === 'Pending' ? -1 : 1)).map(o => (
-                      <tr key={o.name}>
-                        <td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.total)}</td>
-                        <td style={{ color: o.status === 'Pending' ? 'var(--bad)' : 'var(--good)', fontWeight: 700 }}>{o.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </>
-      )}
+      <div className="panel">
+        <h2>Ad spend, this window <small>{filteredAds.length} days logged</small></h2>
+        <table className="tbl">
+          <tbody>
+            {filteredAds.length === 0 && <tr><td colSpan={2} className="mini">No ads logged for this window.</td></tr>}
+            {filteredAds.map(a => (
+              <tr key={a.id}><td>{a.ad_date} <span className="mini">({a.label})</span></td><td>{money(a.amount)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
@@ -921,8 +992,7 @@ function Settings({ settings, reload }) {
 
   async function save() {
     const { error } = await supabase.from('settings').update({
-      employee: Number(form.employee) || 0, stock: Number(form.stock) || 0,
-      other: Number(form.other) || 0, bank: Number(form.bank) || 0,
+      bank: Number(form.bank) || 0,
     }).eq('id', 1);
     if (error) { alert('Could not save: ' + error.message); return; }
     await reload();
@@ -930,15 +1000,12 @@ function Settings({ settings, reload }) {
 
   return (
     <div className="panel">
-      <h2>Money not from weekly batches</h2>
-      <div className="settings-grid">
-        <div className="field"><label>Employee wages</label><input type="number" step="0.01" value={form.employee} onChange={e => setForm(s => ({ ...s, employee: e.target.value }))} /></div>
-        <div className="field"><label>Stock purchases</label><input type="number" step="0.01" value={form.stock} onChange={e => setForm(s => ({ ...s, stock: e.target.value }))} /></div>
-        <div className="field"><label>Other costs</label><input type="number" step="0.01" value={form.other} onChange={e => setForm(s => ({ ...s, other: e.target.value }))} /></div>
+      <h2>Bank</h2>
+      <div className="settings-grid" style={{ gridTemplateColumns: '1fr' }}>
         <div className="field"><label>Real bank balance</label><input type="number" step="0.01" value={form.bank} onChange={e => setForm(s => ({ ...s, bank: e.target.value }))} /></div>
       </div>
       <div style={{ marginTop: 16 }}><button className="btn gold" onClick={save}>Save</button></div>
-      <div className="note">These are running totals-to-date, not filtered by the dashboard date range.</div>
+      <div className="note">Employee wages, stock purchases, and other expenses now live in the Funds tab.</div>
     </div>
   );
 }
