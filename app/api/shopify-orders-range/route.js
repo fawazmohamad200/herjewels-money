@@ -35,8 +35,10 @@ export async function POST(request) {
 
     const token = await getAccessToken(domain, clientId, clientSecret);
 
-    const createdMin = `${fromDate}T00:00:00Z`;
-    const createdMax = `${toDate}T23:59:59Z`;
+    // Your store's real clock is Beirut time (UTC+3) - use that offset, not UTC,
+    // or early-morning orders get cut off into the previous day by mistake.
+    const createdMin = `${fromDate}T00:00:00+03:00`;
+    const createdMax = `${toDate}T23:59:59+03:00`;
     let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(createdMin)}&created_at_max=${encodeURIComponent(createdMax)}&limit=250&fields=id,name,total_price,created_at,financial_status,fulfillment_status`;
 
     const allOrders = [];
