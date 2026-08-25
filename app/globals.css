@@ -113,27 +113,48 @@ table.tbl td.neg{color:var(--bad);font-weight:600;}
 .prod-row-edit input{width:80px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px;text-align:right;}
 
 /* ---- Mobile ---- */
+/* ---- Bottom nav (mobile only) ---- */
+.bottom-nav{display:none;}
+
 @media (max-width: 720px) {
-  .header{padding:16px;flex-direction:column;align-items:flex-start;gap:12px;}
-  .tabs{width:100%;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;}
-  .tab{flex:0 0 auto;}
-  .body{padding:14px;}
+  .header{padding:14px 16px;}
+  .desktop-tabs{display:none;}
+  .body{padding:14px;padding-bottom:76px;} /* leave room for the fixed bottom nav */
   .kpis{grid-template-columns:repeat(2,1fr);gap:8px;}
   .kpi{padding:12px 12px 10px;}
   .kpi .val{font-size:18px;}
   .panel{padding:16px 14px;}
   .settings-grid{grid-template-columns:1fr;}
   .newweek-grid{grid-template-columns:1fr !important;}
-  .daterange{gap:8px;}
-  .daterange .field{min-width:120px;}
-  .daterange .btn{flex:1 1 auto;padding:9px 10px;font-size:12px;}
+
+  .daterange{flex-direction:column;align-items:stretch;gap:10px;}
+  .daterange .field{width:100%;}
+  .daterange .field input{width:100%;min-height:44px;font-size:16px;}
+  .daterange .btn{width:100%;min-height:44px;font-size:14px;}
+  .daterange .mini{order:99;}
+
   table.tbl{display:block;overflow-x:auto;white-space:nowrap;}
   .qtyrow, .qtyhead{grid-template-columns:1fr 55px 55px 70px;gap:5px;font-size:11.5px;}
   .qtyrow input{font-size:12px;padding:4px;}
   .livebar{flex-direction:column;gap:6px;}
   .gate-card{width:88vw;max-width:320px;padding:32px 24px;}
+
+  input[type="date"]{min-height:44px;font-size:16px;} /* 16px prevents iOS auto-zoom on focus */
+
+  .bottom-nav{
+    display:flex; position:fixed; bottom:0; left:0; right:0; z-index:50;
+    background:var(--paper); border-top:1px solid var(--line);
+    box-shadow:0 -4px 16px rgba(0,0,0,.06);
+    overflow-x:auto; padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+  }
+  .bottom-nav-item{
+    flex:1 0 auto; min-width:64px; text-align:center; padding:8px 10px;
+    font-size:11px; font-weight:600; color:var(--muted); border-radius:10px;
+  }
+  .bottom-nav-item.active{color:var(--deep2); background:var(--gold-soft);}
 }
 @media (max-width: 420px) {
   .kpis{grid-template-columns:1fr 1fr;}
   .brand h1{font-size:15px;}
+  .bottom-nav-item{font-size:10px;padding:8px 6px;}
 }
