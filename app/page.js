@@ -650,6 +650,7 @@ function Funds({ funds, totals, reload }) {
   const [label, setLabel] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(todayStr());
+  const [editing, setEditing] = useState({}); // id -> {type, label, amount, entry_date}
 
   const fundList = {
     packaging: { title: 'Packaging', accrued: totals.packagingAccrued, reserved: totals.packagingReserved, spent: totals.packagingSpent, needed: totals.packagingStillNeeded, hasReserve: true },
@@ -673,6 +674,18 @@ function Funds({ funds, totals, reload }) {
   async function deleteEntry(id) {
     if (!confirm('Delete this entry? This cannot be undone.')) return;
     await supabase.from('fund_entries').delete().eq('id', id);
+    await reload();
+  }
+  function startEdit(f) {
+    setEditing(e => ({ ...e, [f.id]: { type: f.type, label: f.label, amount: f.amount, entry_date: f.entry_date } }));
+  }
+  async function saveEdit(id, hasReserve) {
+    const v = editing[id];
+    const { error } = await supabase.from('fund_entries').update({
+      type: hasReserve ? v.type : v.type, label: v.label, amount: Number(v.amount) || 0, entry_date: v.entry_date,
+    }).eq('id', id);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    setEditing(e => { const c = { ...e }; delete c[id]; return c; });
     await reload();
   }
 
@@ -724,14 +737,41 @@ function Funds({ funds, totals, reload }) {
               <thead><tr><th>Date</th><th>Note</th>{info.hasReserve && <th>Type</th>}<th>Amount</th><th></th></tr></thead>
               <tbody>
                 {entries.length === 0 && <tr><td colSpan={info.hasReserve ? 4 : 3} className="mini">No entries yet.</td></tr>}
-                {entries.map(f => (
-                  <tr key={f.id}>
-                    <td>{f.entry_date}</td><td>{f.label}</td>
-                    {info.hasReserve && <td>{f.type === 'reserve' ? 'Reserved' : 'Spent'}</td>}
-                    <td>{money(f.amount)}</td>
-                    <td><button className="del" onClick={() => deleteEntry(f.id)}>✕</button></td>
-                  </tr>
-                ))}
+                {entries.map(f => {
+                  const ed = editing[f.id];
+                  if (ed) {
+                    return (
+                      <tr key={f.id}>
+                        <td><input type="date" value={ed.entry_date} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], entry_date: e.target.value } }))} style={{ minWidth: 130 }} /></td>
+                        <td><input value={ed.label} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], label: e.target.value } }))} style={{ width: '100%' }} /></td>
+                        {info.hasReserve && (
+                          <td>
+                            <select value={ed.type} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], type: e.target.value } }))} style={{ width: '100%', padding: '4px 6px' }}>
+                              <option value="spend">Spent</option>
+                              <option value="reserve">Reserved</option>
+                            </select>
+                          </td>
+                        )}
+                        <td><input type="number" step="0.01" value={ed.amount} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], amount: e.target.value } }))} style={{ width: 80 }} /></td>
+                        <td>
+                          <button className="btn gold" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => saveEdit(f.id, info.hasReserve)}>Save</button>
+                          <button className="expand" onClick={() => setEditing(e => { const c = { ...e }; delete c[f.id]; return c; })}>Cancel</button>
+                        </td>
+                      </tr>
+                    );
+                  }
+                  return (
+                    <tr key={f.id}>
+                      <td>{f.entry_date}</td><td>{f.label}</td>
+                      {info.hasReserve && <td>{f.type === 'reserve' ? 'Reserved' : 'Spent'}</td>}
+                      <td>{money(f.amount)}</td>
+                      <td>
+                        <button className="expand" onClick={() => startEdit(f)}>Edit</button>
+                        <button className="del" onClick={() => deleteEntry(f.id)}>✕</button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -826,6 +866,7 @@ function Ads({ ads, legacy, reload }) {
   const [tiktokAmount, setTiktokAmount] = useState('');
   const [otherAmount, setOtherAmount] = useState('');
   const [date, setDate] = useState(todayStr());
+  const [editing, setEditing] = useState({}); // id -> {ad_date, label, amount}
 
   async function addAd() {
     const meta = Number(metaAmount) || 0, tiktok = Number(tiktokAmount) || 0, other = Number(otherAmount) || 0;
@@ -847,6 +888,18 @@ function Ads({ ads, legacy, reload }) {
     await supabase.from('ads').delete().eq('id', id);
     await reload();
   }
+  function startEdit(a) {
+    setEditing(e => ({ ...e, [a.id]: { ad_date: a.ad_date, label: a.label, amount: a.amount } }));
+  }
+  async function saveEdit(id) {
+    const v = editing[id];
+    const { error } = await supabase.from('ads').update({
+      ad_date: v.ad_date, label: v.label, amount: Number(v.amount) || 0, ad_date_to: v.ad_date,
+    }).eq('id', id);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    setEditing(e => { const c = { ...e }; delete c[id]; return c; });
+    await reload();
+  }
 
   return (
     <div className="panel">
@@ -857,12 +910,28 @@ function Ads({ ads, legacy, reload }) {
           {legacy.filter(b => b.ads).map(b => (
             <tr key={'lg' + b.id} style={{ opacity: .65 }}><td>{b.label} <span className="mini">(legacy)</span></td><td>-</td><td>{money(b.ads)}</td><td></td></tr>
           ))}
-          {ads.map(a => (
-            <tr key={a.id}>
-              <td>{a.ad_date}</td><td className="mini">{a.label}</td><td>{money(a.amount)}</td>
-              <td><button className="del" onClick={() => deleteAd(a.id)}>✕</button></td>
-            </tr>
-          ))}
+          {ads.map(a => {
+            const ed = editing[a.id];
+            return ed ? (
+              <tr key={a.id}>
+                <td><input type="date" value={ed.ad_date} onChange={e => setEditing(s => ({ ...s, [a.id]: { ...s[a.id], ad_date: e.target.value } }))} style={{ minWidth: 130 }} /></td>
+                <td><input value={ed.label} onChange={e => setEditing(s => ({ ...s, [a.id]: { ...s[a.id], label: e.target.value } }))} style={{ width: '100%' }} /></td>
+                <td><input type="number" step="0.01" value={ed.amount} onChange={e => setEditing(s => ({ ...s, [a.id]: { ...s[a.id], amount: e.target.value } }))} style={{ width: 80 }} /></td>
+                <td>
+                  <button className="btn gold" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => saveEdit(a.id)}>Save</button>
+                  <button className="expand" onClick={() => setEditing(e => { const c = { ...e }; delete c[a.id]; return c; })}>Cancel</button>
+                </td>
+              </tr>
+            ) : (
+              <tr key={a.id}>
+                <td>{a.ad_date}</td><td className="mini">{a.label}</td><td>{money(a.amount)}</td>
+                <td>
+                  <button className="expand" onClick={() => startEdit(a)}>Edit</button>
+                  <button className="del" onClick={() => deleteAd(a.id)}>✕</button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr 1fr 1fr auto' }}>
