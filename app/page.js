@@ -506,13 +506,13 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       <h2>Weeks <small>one entry per Topspeed paper - COD and already-paid orders together, exactly like the real paper</small></h2>
       <table className="tbl">
         <thead>
-          <tr><th>Week</th><th>Delivered</th><th>Cancelled</th><th>Revenue</th><th>Cash - Topspeed</th><th>Cash - Prepaid</th><th>Capital</th><th>Packaging</th><th></th></tr>
+          <tr><th>Week</th><th>Delivered (COD)</th><th>Prepaid</th><th>Cancelled</th><th>Revenue</th><th>Cash - Topspeed</th><th>Cash - Prepaid</th><th>Capital</th><th>Packaging</th><th></th></tr>
         </thead>
         <tbody>
           {legacy.map(b => (
             <tr key={'lg' + b.id} style={{ opacity: .65 }}>
               <td>{b.label} <span className="mini">(legacy)</span></td>
-              <td>{b.delivered}</td><td>{b.cancelled}</td>
+              <td>{b.delivered}</td><td>0</td><td>{b.cancelled}</td>
               <td>{money(b.revenue)}</td><td>{money(b.revenue)}</td><td>$0.00</td><td>{money(b.capital)}</td><td>-</td><td></td>
             </tr>
           ))}
@@ -527,7 +527,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                     <button className="expand" onClick={() => setExpanded(e => ({ ...e, [w.id]: !e[w.id] }))}>{isOpen ? '▾' : '▸'}</button>
                     {w.label} <span className="mini">({w.week_date})</span>
                   </td>
-                  <td>{w.delivered}</td><td>{w.cancelled}</td>
+                  <td>{w.delivered}</td><td>{w.paid_orders || 0}</td><td>{w.cancelled}</td>
                   <td>{money(t.revenue)}</td><td>{money(t.cashTopspeed)}</td><td>{money(t.cashPaid)}</td><td>{money(t.capital)}</td><td>{money(t.packaging)}</td>
                   <td>
                     <button className="expand" onClick={() => startEditWeek(w)}>Edit</button>
@@ -535,7 +535,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                   </td>
                 </tr>
                 {isOpen && (
-                  <tr><td colSpan={9}>
+                  <tr><td colSpan={10}>
                     <div className="week-detail">
                       {nonZero.length ? nonZero.map((it, idx) => {
                         const p = products.find(pp => pp.id === it.product_id);
