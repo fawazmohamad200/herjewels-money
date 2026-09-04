@@ -332,7 +332,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
   }, [qty, products]);
 
   const livePaidRevenue = useMemo(() => {
-    return matchedOrders.filter(o => o.isPaidBox).reduce((s, o) => s + o.total, 0);
+    return matchedOrders.filter(o => o.isPaidBox).reduce((s, o) => s + o.total * 0.98, 0);
   }, [matchedOrders]);
 
   function matchProduct(title, variant) {
@@ -420,7 +420,8 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
   async function saveWeek() {
     setSaving(true);
     try {
-      const paidRevenue = matchedOrders.filter(o => o.isPaidBox).reduce((s, o) => s + o.total, 0);
+      // Whish takes a 2% cut - the real cash you receive is 98% of the order total.
+      const paidRevenue = matchedOrders.filter(o => o.isPaidBox).reduce((s, o) => s + o.total * 0.98, 0);
       const paidOrderCount = matchedOrders.filter(o => o.isPaidBox).length;
 
       const payload = {
@@ -478,7 +479,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
           return {
             order_name: o.name, tracking_number: o.trackingNumber,
             placed_at: (o.createdAt || '').slice(0, 10) || date,
-            total: o.total, capital, fee: o.isPaidBox ? 0 : avgFee,
+            total: o.total, capital, fee: o.isPaidBox ? (o.total * 0.02) : avgFee,
             kind: o.isPaidBox ? 'prepaid' : 'topspeed', week_id: weekId,
           };
         });
@@ -588,7 +589,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
               placeholder={'SS0033487 34\nSS0033487 33\n...'}
             />
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
-              Already-paid tracking numbers - Whish/manual, no fee, cash already in your account
+              Already-paid tracking numbers - Whish/manual. No Topspeed fee, but Whish keeps 2% - real cash calculates automatically.
             </label>
             <textarea
               value={trackingPaid}
