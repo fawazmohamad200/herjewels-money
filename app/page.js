@@ -409,6 +409,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
         paidCount: withClassification.filter(o => o.isPaidBox).length,
         notFound: data.notFound,
         unmatchedProducts: [...unmatchedProducts],
+        matches: withClassification.map(o => ({ tracking: o.trackingNumber, orderName: o.name, isPaidBox: o.isPaidBox })),
       });
     } catch (err) {
       alert('Lookup failed: ' + err.message);
@@ -546,10 +547,10 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                         );
                       }) : <div className="mini">No products logged.</div>}
                       <div className="mini" style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--line)'}}>
-                        COD tracking: {orders.filter(o => o.week_id === w.id && o.kind === 'topspeed').map(o => o.tracking_number).filter(Boolean).join(', ') || 'none'}
+                        <b>COD orders:</b> {orders.filter(o => o.week_id === w.id && o.kind === 'topspeed').map(o => `${o.order_name} (${o.tracking_number})`).join(', ') || 'none'}
                       </div>
                       <div className="mini">
-                        Already-paid tracking: {orders.filter(o => o.week_id === w.id && o.kind === 'prepaid').map(o => o.tracking_number).filter(Boolean).join(', ') || 'none'}
+                        <b>Already-paid orders:</b> {orders.filter(o => o.week_id === w.id && o.kind === 'prepaid').map(o => `${o.order_name} (${o.tracking_number})`).join(', ') || 'none'}
                       </div>
                     </div>
                   </td></tr>
@@ -610,6 +611,17 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                 {lookupResult.unmatchedProducts.length > 0 && (
                   <div style={{ color: 'var(--warn)', marginTop: 4 }}>
                     Product not in your Products tab: {lookupResult.unmatchedProducts.join(', ')}
+                  </div>
+                )}
+                {lookupResult.matches.length > 0 && (
+                  <div style={{ marginTop: 10, maxHeight: 220, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8, padding: 8, background: '#fff' }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Tracking → Order number:</div>
+                    {[...lookupResult.matches].sort((a, b) => (a.isPaidBox === b.isPaidBox ? 0 : a.isPaidBox ? 1 : -1)).map((m, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11.5 }}>
+                        <span>{m.tracking}</span>
+                        <span style={{ fontWeight: 700, color: m.isPaidBox ? 'var(--good)' : 'var(--ink)' }}>{m.orderName} {m.isPaidBox ? '(paid)' : ''}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
