@@ -387,7 +387,9 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       const codSet = new Set(codList.map(t => t.replace(/\s+/g, '').toUpperCase()));
       const paidSet = new Set(paidList.map(t => t.replace(/\s+/g, '').toUpperCase()));
 
-      const newQty = { ...qty };
+      // Every lookup REPLACES the quantities entirely - never adds on top of
+      // whatever was already there (that's what caused impossible totals like 305).
+      const newQty = {};
       let unmatchedProducts = new Set();
       const withClassification = data.matched.map(order => {
         const normTrack = (order.trackingNumber || '').replace(/\s+/g, '').toUpperCase();
