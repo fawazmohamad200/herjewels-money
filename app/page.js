@@ -146,13 +146,14 @@ export default function Home() {
     const capitalSpent = sumFund('capital', 'spend');
     const employeeCost = funds.filter(f => f.fund === 'employee').reduce((s, f) => s + Number(f.amount), 0);
     const otherCost = funds.filter(f => f.fund === 'other').reduce((s, f) => s + Number(f.amount), 0);
+    const personalCost = funds.filter(f => f.fund === 'personal').reduce((s, f) => s + Number(f.amount), 0);
     const injections = funds.filter(f => f.fund === 'injection').reduce((s, f) => s + Number(f.amount), 0);
 
     const packagingStillNeeded = packagingAccrued + packagingReserved - packagingSpent;
     const capitalStillNeeded = capitalAccrued + capitalReserved - capitalSpent;
 
     const cashIn = topspeedCash + injections;
-    const cashOut = adsTotal + employeeCost + otherCost + packagingSpent + capitalSpent;
+    const cashOut = adsTotal + employeeCost + otherCost + personalCost + packagingSpent + capitalSpent;
     const cashOnHand = cashIn - cashOut;
     // A surplus (already ahead on stock/packaging) should never ADD to spendable cash -
     // it just means you owe $0 right now, not that you have extra money.
@@ -161,7 +162,7 @@ export default function Home() {
     return {
       topspeedCash, injections, capitalAccrued, packagingAccrued, packagingReserved, packagingSpent,
       capitalReserved, capitalSpent, packagingStillNeeded, capitalStillNeeded,
-      employeeCost, otherCost, adsTotal, deliveredTotal, cancelledTotal, revenueTotal,
+      employeeCost, otherCost, personalCost, adsTotal, deliveredTotal, cancelledTotal, revenueTotal,
       cashIn, cashOut, cashOnHand, net,
     };
   }, [weeks, legacy, ads, funds]);
@@ -191,7 +192,7 @@ export default function Home() {
     );
   }
 
-  const TAB_LIST = ['dashboard', 'weeks', 'funds', 'performance', 'products', 'ads', 'settings'];
+  const TAB_LIST = ['dashboard', 'weeks', 'funds', 'personal', 'performance', 'products', 'ads', 'settings'];
 
   return (
     <div>
@@ -215,6 +216,7 @@ export default function Home() {
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} weeksCount={weeks.length} />}
             {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'funds' && <Funds funds={funds} totals={totals} reload={loadAll} />}
+            {tab === 'personal' && <Personal funds={funds} totals={totals} reload={loadAll} />}
             {tab === 'performance' && <Performance orders={orders} ads={ads} products={products} />}
             {tab === 'products' && <Products products={products} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
@@ -279,7 +281,8 @@ function Dashboard({ totals: c, settings, weeksCount }) {
             <tr><td>Your own money added</td><td>{money(c.injections)}</td></tr>
             <tr><td>Ads spent, all-time</td><td className="neg">-{money(c.adsTotal)}</td></tr>
             <tr><td>Employee wages</td><td className="neg">-{money(c.employeeCost)}</td></tr>
-            <tr><td>Other expenses</td><td className="neg">-{money(c.otherCost)}</td></tr>
+            <tr><td>Other business expenses</td><td className="neg">-{money(c.otherCost)}</td></tr>
+            <tr><td>Personal spending</td><td className="neg">-{money(c.personalCost)}</td></tr>
           </tbody>
         </table>
       </div>
@@ -405,10 +408,12 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       });
       setQty(newQty);
       setMatchedOrders(withClassification);
+      const codCount = withClassification.filter(o => !o.isPaidBox).length;
+      const paidCount = withClassification.filter(o => o.isPaidBox).length;
+      setDelivered(String(codCount)); // Delivered now comes from real matched orders, not a typed guess
       setLookupResult({
         matchedCount: data.matched.length,
-        codCount: withClassification.filter(o => !o.isPaidBox).length,
-        paidCount: withClassification.filter(o => o.isPaidBox).length,
+        codCount, paidCount,
         notFound: data.notFound,
         unmatchedProducts: [...unmatchedProducts],
         matches: withClassification.map(o => ({ tracking: o.trackingNumber, orderName: o.name, isPaidBox: o.isPaidBox })),
@@ -571,7 +576,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
           <div className="newweek-grid">
             <div className="field"><label>Week label</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="19 Aug paper" /></div>
             <div className="field"><label>Paper date - Dashboard filters by THIS</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
-            <div className="field"><label>Delivered orders (COD)</label><input type="number" value={delivered} onChange={e => setDelivered(e.target.value)} /></div>
+            <div className="field"><label>Delivered (COD) - auto-fills after lookup</label><input type="number" value={delivered} onChange={e => setDelivered(e.target.value)} /></div>
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
           </div>
           <div className="newweek-grid">
@@ -671,9 +676,12 @@ function Funds({ funds, totals, reload }) {
     packaging: { title: 'Packaging', accrued: totals.packagingAccrued, reserved: totals.packagingReserved, spent: totals.packagingSpent, needed: totals.packagingStillNeeded, hasReserve: true },
     capital: { title: 'Capital (stock)', accrued: totals.capitalAccrued, reserved: totals.capitalReserved, spent: totals.capitalSpent, needed: totals.capitalStillNeeded, hasReserve: true },
     employee: { title: 'Employee wages', spent: totals.employeeCost, hasReserve: false },
-    other: { title: 'Other expenses', spent: totals.otherCost, hasReserve: false },
+    other: { title: 'Business - Other', spent: totals.otherCost, hasReserve: false },
     injection: { title: 'Your own money added', spent: totals.injections, hasReserve: false, isIncome: true },
   };
+  // 'personal' also exists as a fund category (see the Personal tab) - shown here read-only
+  // so you can still see and reassign old mixed entries, but new personal spending goes in its own tab.
+  const allFundList = { ...fundList, personal: { title: 'Personal spending', spent: totals.personalCost, hasReserve: false } };
 
   async function addEntry() {
     if (!amount) return;
@@ -692,12 +700,12 @@ function Funds({ funds, totals, reload }) {
     await reload();
   }
   function startEdit(f) {
-    setEditing(e => ({ ...e, [f.id]: { type: f.type, label: f.label, amount: f.amount, entry_date: f.entry_date } }));
+    setEditing(e => ({ ...e, [f.id]: { fund: f.fund, type: f.type, label: f.label, amount: f.amount, entry_date: f.entry_date } }));
   }
-  async function saveEdit(id, hasReserve) {
+  async function saveEdit(id) {
     const v = editing[id];
     const { error } = await supabase.from('fund_entries').update({
-      type: hasReserve ? v.type : v.type, label: v.label, amount: Number(v.amount) || 0, entry_date: v.entry_date,
+      fund: v.fund, type: v.type, label: v.label, amount: Number(v.amount) || 0, entry_date: v.entry_date,
     }).eq('id', id);
     if (error) { alert('Could not save: ' + error.message); return; }
     setEditing(e => { const c = { ...e }; delete c[id]; return c; });
@@ -740,18 +748,20 @@ function Funds({ funds, totals, reload }) {
         </div>
       </div>
 
-      {Object.entries(fundList).map(([key, info]) => {
+      {Object.entries(allFundList).map(([key, info]) => {
         const entries = funds.filter(f => f.fund === key);
         if (!entries.length && info.hasReserve === false) return null;
+        const canReassign = key === 'other' || key === 'personal';
         return (
           <div className="panel" key={key}>
             <h2>{info.title}
               {info.hasReserve && <small>accrued {money(info.accrued)} + reserved {money(info.reserved)} - spent {money(info.spent)} = needed {money(info.needed)}</small>}
+              {key === 'personal' && <small>see the Personal tab for the full breakdown</small>}
             </h2>
             <table className="tbl">
-              <thead><tr><th>Date</th><th>Note</th>{info.hasReserve && <th>Type</th>}<th>Amount</th><th></th></tr></thead>
+              <thead><tr><th>Date</th><th>Note</th>{info.hasReserve && <th>Type</th>}{canReassign && <th>Category</th>}<th>Amount</th><th></th></tr></thead>
               <tbody>
-                {entries.length === 0 && <tr><td colSpan={info.hasReserve ? 4 : 3} className="mini">No entries yet.</td></tr>}
+                {entries.length === 0 && <tr><td colSpan={info.hasReserve || canReassign ? 4 : 3} className="mini">No entries yet.</td></tr>}
                 {entries.map(f => {
                   const ed = editing[f.id];
                   if (ed) {
@@ -767,9 +777,17 @@ function Funds({ funds, totals, reload }) {
                             </select>
                           </td>
                         )}
+                        {canReassign && (
+                          <td>
+                            <select value={ed.fund} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], fund: e.target.value } }))} style={{ width: '100%', padding: '4px 6px' }}>
+                              <option value="other">Business</option>
+                              <option value="personal">Personal</option>
+                            </select>
+                          </td>
+                        )}
                         <td><input type="number" step="0.01" value={ed.amount} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], amount: e.target.value } }))} style={{ width: 80 }} /></td>
                         <td>
-                          <button className="btn gold" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => saveEdit(f.id, info.hasReserve)}>Save</button>
+                          <button className="btn gold" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => saveEdit(f.id)}>Save</button>
                           <button className="expand" onClick={() => setEditing(e => { const c = { ...e }; delete c[f.id]; return c; })}>Cancel</button>
                         </td>
                       </tr>
@@ -779,6 +797,7 @@ function Funds({ funds, totals, reload }) {
                     <tr key={f.id}>
                       <td>{f.entry_date}</td><td>{f.label}</td>
                       {info.hasReserve && <td>{f.type === 'reserve' ? 'Reserved' : 'Spent'}</td>}
+                      {canReassign && <td>{key === 'personal' ? 'Personal' : 'Business'}</td>}
                       <td>{money(f.amount)}</td>
                       <td>
                         <button className="expand" onClick={() => startEdit(f)}>Edit</button>
@@ -792,6 +811,92 @@ function Funds({ funds, totals, reload }) {
           </div>
         );
       })}
+    </>
+  );
+}
+
+function Personal({ funds, totals, reload }) {
+  const [label, setLabel] = useState('');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(todayStr());
+  const [editing, setEditing] = useState({});
+
+  const entries = funds.filter(f => f.fund === 'personal').sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+
+  async function addEntry() {
+    if (!amount) return;
+    const finalLabel = label || `Personal, ${date}`;
+    const { error } = await supabase.from('fund_entries').insert({
+      fund: 'personal', type: 'spend', label: finalLabel, amount: Number(amount), entry_date: date,
+    });
+    if (error) { alert('Could not add: ' + error.message); return; }
+    setLabel(''); setAmount('');
+    await reload();
+  }
+  async function deleteEntry(id) {
+    if (!confirm('Delete this entry? This cannot be undone.')) return;
+    await supabase.from('fund_entries').delete().eq('id', id);
+    await reload();
+  }
+  function startEdit(f) {
+    setEditing(e => ({ ...e, [f.id]: { label: f.label, amount: f.amount, entry_date: f.entry_date } }));
+  }
+  async function saveEdit(id) {
+    const v = editing[id];
+    const { error } = await supabase.from('fund_entries').update({
+      label: v.label, amount: Number(v.amount) || 0, entry_date: v.entry_date,
+    }).eq('id', id);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    setEditing(e => { const c = { ...e }; delete c[id]; return c; });
+    await reload();
+  }
+
+  return (
+    <>
+      <div className="kpis" style={{ gridTemplateColumns: '1fr' }}>
+        <div className="kpi warn"><div className="lbl">Total spent on yourself, all-time</div><div className="val">{money(totals.personalCost)}</div></div>
+      </div>
+      <div className="panel">
+        <h2>Personal spending <small>coffee, going out, anything that isn't the business - kept separate from Business - Other</small></h2>
+        <table className="tbl">
+          <thead><tr><th>Date</th><th>Note</th><th>Amount</th><th></th></tr></thead>
+          <tbody>
+            {entries.length === 0 && <tr><td colSpan={3} className="mini">No entries yet.</td></tr>}
+            {entries.map(f => {
+              const ed = editing[f.id];
+              if (ed) {
+                return (
+                  <tr key={f.id}>
+                    <td><input type="date" value={ed.entry_date} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], entry_date: e.target.value } }))} style={{ minWidth: 130 }} /></td>
+                    <td><input value={ed.label} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], label: e.target.value } }))} style={{ width: '100%' }} /></td>
+                    <td><input type="number" step="0.01" value={ed.amount} onChange={e => setEditing(s => ({ ...s, [f.id]: { ...s[f.id], amount: e.target.value } }))} style={{ width: 80 }} /></td>
+                    <td>
+                      <button className="btn gold" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => saveEdit(f.id)}>Save</button>
+                      <button className="expand" onClick={() => setEditing(e => { const c = { ...e }; delete c[f.id]; return c; })}>Cancel</button>
+                    </td>
+                  </tr>
+                );
+              }
+              return (
+                <tr key={f.id}>
+                  <td>{f.entry_date}</td><td>{f.label}</td><td>{money(f.amount)}</td>
+                  <td>
+                    <button className="expand" onClick={() => startEdit(f)}>Edit</button>
+                    <button className="del" onClick={() => deleteEntry(f.id)}>✕</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="newweek-grid" style={{ marginTop: 14, gridTemplateColumns: '2fr 1fr 1fr auto' }}>
+          <div className="field"><label>Note</label><input value={label} onChange={e => setLabel(e.target.value)} placeholder="coffee, lunch, etc." /></div>
+          <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+          <div className="field"><label>Amount $</label><input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} /></div>
+          <button className="btn gold" onClick={addEntry}>Add</button>
+        </div>
+        <div className="note">This still counts in Cash Out on the Dashboard (it's real money leaving), but stays visible here separately from business costs.</div>
+      </div>
     </>
   );
 }
