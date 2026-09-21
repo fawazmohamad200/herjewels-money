@@ -821,7 +821,26 @@ function Personal({ funds, totals, reload }) {
   const [date, setDate] = useState(todayStr());
   const [editing, setEditing] = useState({});
 
-  const entries = funds.filter(f => f.fund === 'personal').sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  const allPersonal = funds.filter(f => f.fund === 'personal');
+  const earliest = allPersonal.length ? allPersonal.map(f => f.entry_date).reduce((a, b) => (a < b ? a : b)) : todayStr();
+  const [from, setFrom] = useState(earliest);
+  const [to, setTo] = useState(todayStr());
+
+  const entries = allPersonal
+    .filter(f => f.entry_date >= from && f.entry_date <= to)
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  const rangeTotal = entries.reduce((s, f) => s + Number(f.amount), 0);
+
+  function setThisWeek() {
+    const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6);
+    setFrom(start.toISOString().slice(0, 10)); setTo(end.toISOString().slice(0, 10));
+  }
+  function setThisMonth() {
+    const now = new Date();
+    setFrom(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10));
+    setTo(todayStr());
+  }
+  function setAllTime() { setFrom(earliest); setTo(todayStr()); }
 
   async function addEntry() {
     if (!amount) return;
@@ -853,8 +872,16 @@ function Personal({ funds, totals, reload }) {
 
   return (
     <>
-      <div className="kpis" style={{ gridTemplateColumns: '1fr' }}>
-        <div className="kpi warn"><div className="lbl">Total spent on yourself, all-time</div><div className="val">{money(totals.personalCost)}</div></div>
+      <div className="daterange">
+        <div className="field"><label>From</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} /></div>
+        <div className="field"><label>To</label><input type="date" value={to} onChange={e => setTo(e.target.value)} /></div>
+        <button className="btn ghost2" onClick={setThisWeek}>This week</button>
+        <button className="btn ghost2" onClick={setThisMonth}>This month</button>
+        <button className="btn ghost2" onClick={setAllTime}>All time</button>
+      </div>
+      <div className="kpis" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <div className="kpi warn"><div className="lbl">Spent in this range</div><div className="val">{money(rangeTotal)}</div></div>
+        <div className="kpi warn"><div className="lbl">Total spent, all-time</div><div className="val">{money(totals.personalCost)}</div></div>
       </div>
       <div className="panel">
         <h2>Personal spending <small>coffee, going out, anything that isn't the business - kept separate from Business - Other</small></h2>
