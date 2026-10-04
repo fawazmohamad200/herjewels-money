@@ -1101,6 +1101,8 @@ function Performance({ orders, ads, products }) {
   const [allOrders, setAllOrders] = useState(null);
   const [loadingAll, setLoadingAll] = useState(false);
   const [allErr, setAllErr] = useState('');
+  const [excludedCount, setExcludedCount] = useState(0);
+  const [heldCount, setHeldCount] = useState(0);
 
   const filteredAds = ads.filter(a => a.ad_date >= from && a.ad_date <= to);
   const adSpend = filteredAds.reduce((s, a) => s + Number(a.amount), 0);
@@ -1134,19 +1136,33 @@ function Performance({ orders, ads, products }) {
       const loggedMap = {};
       orders.forEach(o => { loggedMap[o.order_name] = o; });
 
-      const classified = data.orders.map(o => {
+      let ignored = 0;
+      let held = 0;
+      const classified = [];
+      data.orders.forEach(o => {
         const logged = loggedMap[o.name];
+        // A cancelled / voided order that was never saved on a paper is not a sale - leave it out completely.
+        const isCancelled = !!o.cancelledAt || o.financialStatus === 'voided' || o.financialStatus === 'refunded';
+        if (isCancelled && !logged) { ignored++; return; }
+        // Paid but not shipped yet = money you already hold (e.g. Whish). Not pending, not collected - leave it out.
+        const isPaid = o.financialStatus === 'paid' || o.financialStatus === 'partially_refunded';
+        if (!logged && o.fulfillmentStatus !== 'fulfilled' && isPaid) { held++; return; }
+
         let capital = 0;
         (o.lineItems || []).forEach(li => {
           const p = matchProduct(li.title, li.variant);
           if (p) capital += li.quantity * p.cost;
         });
-        let status, fee, isReal;
+        let status, fee, isReal, reason = '';
         if (logged && logged.kind === 'prepaid') { status = 'Collected - Prepaid'; fee = 0; isReal = true; capital = Number(logged.capital); }
         else if (logged) { status = 'Collected - Topspeed'; fee = Number(logged.fee || 0); isReal = true; capital = Number(logged.capital); }
-        else { status = 'Pending'; fee = 3.5; isReal = false; } // real capital (from real Shopify items), estimated fee only
-        return { ...o, status, capital, fee, isReal };
+        else if (o.fulfillmentStatus !== 'fulfilled') { status = 'Pending'; reason = 'not shipped yet, unpaid'; fee = 3.5; isReal = false; }
+        else if (['pending', 'authorized', 'partially_paid'].includes(o.financialStatus)) { status = 'Pending'; reason = 'shipped, awaiting payment'; fee = 3.5; isReal = false; }
+        else { status = 'Paid - not saved yet'; reason = 'paid in Shopify, not on a saved paper'; fee = 3.5; isReal = false; }
+        classified.push({ ...o, status, reason, capital, fee, isReal });
       });
+      setExcludedCount(ignored);
+      setHeldCount(held);
       setAllOrders(classified);
     } catch (err) {
       setAllErr(err.message);
@@ -1165,13 +1181,14 @@ function Performance({ orders, ads, products }) {
   const netRevenue = totalOrderValue - totalFees;
   const estimatedProfit = netRevenue - totalCapital - packaging - adSpend;
   const collectedCount = allOrders ? allOrders.filter(o => o.isReal).length : 0;
+  const notSavedCount = allOrders ? allOrders.filter(o => o.status === 'Paid - not saved yet').length : 0;
 
   return (
     <>
       <div className="daterange">
         <div className="field"><label>Orders placed from</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
         <div className="field"><label>to</label><input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ border: '2px solid var(--gold)' }} /></div>
-        <div className="mini" style={{ paddingBottom: 9 }}>By the date each order was PLACED - includes pending orders too</div>
+        <div className="mini" style={{ paddingBottom: 9 }}>By the date each order was PLACED. Pending = not shipped and unpaid, or shipped and awaiting payment. Cancelled orders and paid-but-not-shipped orders are not counted.</div>
       </div>
 
       {loadingAll && <div className="loading">Checking Shopify...</div>}
@@ -1188,7 +1205,7 @@ function Performance({ orders, ads, products }) {
           </div>
 
           <div className="panel">
-            <h2>Full picture, this window <small>{allOrders.length} orders - {collectedCount} confirmed, {pending.length} pending</small></h2>
+            <h2>Full picture, this window <small>{allOrders.length} orders - {collectedCount} confirmed, {notSavedCount} paid but not saved in Weeks, {pending.length} pending{excludedCount ? `, ${excludedCount} cancelled ignored` : ''}{heldCount ? `, ${heldCount} paid-not-shipped ignored` : ''}</small></h2>
             <table className="tbl">
               <tbody>
                 <tr><td>Gross order value (all orders)</td><td>{money(totalOrderValue)}</td></tr>
@@ -1202,7 +1219,7 @@ function Performance({ orders, ads, products }) {
               </tbody>
             </table>
             <div className="note" style={{ marginTop: 10 }}>
-              Capital is exact for every order, collected or not - real products, real costs. Only the delivery fee for {pending.length} still-pending orders is an estimate (~$3.50/order), since Topspeed hasn't reported the real fee yet.
+              Capital is exact for every order - real products, real costs. The delivery fee is an estimate (~$3.50/order) for the {pending.length + notSavedCount} orders not yet saved from a paper. Cancelled orders, and paid orders that haven't shipped yet, are not counted at all.
             </div>
           </div>
         </>
@@ -1220,7 +1237,7 @@ function Performance({ orders, ads, products }) {
                 {allOrders && [...allOrders].sort((a, b) => (a.status === 'Pending' ? -1 : 1) - (b.status === 'Pending' ? -1 : 1)).map(o => (
                   <tr key={o.name}>
                     <td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.total)}</td><td>{money(o.capital)}</td>
-                    <td style={{ color: o.status === 'Pending' ? 'var(--bad)' : 'var(--good)', fontWeight: 700 }}>{o.status}</td>
+                    <td style={{ color: o.status === 'Pending' ? 'var(--bad)' : o.status === 'Paid - not saved yet' ? 'var(--warn)' : 'var(--good)', fontWeight: 700 }}>{o.status}{o.reason ? <span className="mini" style={{ display: 'block', fontWeight: 400 }}>{o.reason}</span> : null}</td>
                   </tr>
                 ))}
               </tbody>
