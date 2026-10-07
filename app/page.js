@@ -192,7 +192,7 @@ export default function Home() {
     );
   }
 
-  const TAB_LIST = ['dashboard', 'weeks', 'funds', 'personal', 'performance', 'products', 'ads', 'settings'];
+  const TAB_LIST = ['dashboard', 'weeks', 'thenet', 'funds', 'personal', 'performance', 'products', 'ads', 'settings'];
 
   return (
     <div>
@@ -205,7 +205,7 @@ export default function Home() {
         <div className="tabs desktop-tabs">
           {TAB_LIST.map(t => (
             <div key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-              {t[0].toUpperCase() + t.slice(1)}
+              {t === 'thenet' ? 'The Net' : t[0].toUpperCase() + t.slice(1)}
             </div>
           ))}
         </div>
@@ -214,7 +214,8 @@ export default function Home() {
         {loading ? <div className="loading">Loading...</div> : (
           <>
             {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} weeksCount={weeks.length} />}
-            {tab === 'weeks' && <Weeks weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'weeks' && <Weeks mode="topspeed" weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
+            {tab === 'thenet' && <Weeks mode="thenet" weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'funds' && <Funds funds={funds} totals={totals} reload={loadAll} />}
             {tab === 'personal' && <Personal funds={funds} totals={totals} reload={loadAll} />}
             {tab === 'performance' && <Performance orders={orders} ads={ads} products={products} />}
@@ -228,7 +229,7 @@ export default function Home() {
       <div className="bottom-nav">
         {TAB_LIST.map(t => (
           <div key={t} className={`bottom-nav-item ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-            {t[0].toUpperCase() + t.slice(1)}
+            {t === 'thenet' ? 'The Net' : t[0].toUpperCase() + t.slice(1)}
           </div>
         ))}
       </div>
@@ -303,7 +304,10 @@ function Dashboard({ totals: c, settings, weeksCount }) {
   );
 }
 
-function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
+function Weeks({ weeks: allWeeks, legacy, products, orders, weekTotals, reload, mode = 'topspeed' }) {
+  const isNet = mode === 'thenet';
+  const weeks = allWeeks.filter(w => isNet ? w.kind === 'thenet' : w.kind !== 'thenet');
+  const codKind = isNet ? 'thenet' : 'topspeed';
   const [expanded, setExpanded] = useState({});
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -320,6 +324,8 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
   const [looking, setLooking] = useState(false);
   const [lookupResult, setLookupResult] = useState(null);
   const [matchedOrders, setMatchedOrders] = useState([]); // {..., isPaidBox: true/false}
+  const [netRate, setNetRate] = useState('89500'); // LBP per $1, used only for The Net Excel
+  const [netInfo, setNetInfo] = useState(null); // { fees: {label: fee}, cod: {label: usd-equivalent}, rows, usd, lbp, feeTotal }
 
   const filtered = products.filter(p =>
     !filter || (p.name + ' ' + (p.variant || '')).toLowerCase().includes(filter.toLowerCase())
@@ -353,7 +359,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
     setAdding(true); setEditingId(null);
     setLabel(''); setDate(todayStr()); setDelivered(''); setCancelled('');
     setRevenueCod(''); setFilter(''); setQty({});
-    setTrackingCod(''); setTrackingPaid(''); setLookupResult(null); setMatchedOrders([]);
+    setTrackingCod(''); setTrackingPaid(''); setLookupResult(null); setMatchedOrders([]); setNetInfo(null);
   }
 
   function startEditWeek(w) {
@@ -366,15 +372,16 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
     (w.items || []).forEach(it => { q[it.product_id] = { cod: it.qty_cod || '', paid: it.qty_paid || '' }; });
     setQty(q);
     const savedOrders = orders.filter(o => o.week_id === w.id);
-    setTrackingCod(savedOrders.filter(o => o.kind === 'topspeed').map(o => o.tracking_number).filter(Boolean).join('\n'));
+    setTrackingCod(savedOrders.filter(o => o.kind === codKind).map(o => o.tracking_number).filter(Boolean).join('\n'));
     setTrackingPaid(savedOrders.filter(o => o.kind === 'prepaid').map(o => o.tracking_number).filter(Boolean).join('\n'));
     setLookupResult(null); setMatchedOrders([]); // re-run "Look up" to refresh order records if you change anything
     setExpanded(e => ({ ...e, [w.id]: false }));
   }
 
-  async function lookupTracking() {
-    const codList = trackingCod.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-    const paidList = trackingPaid.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  async function lookupTracking(codOverride, paidOverride, infoOverride) {
+    const info = infoOverride || netInfo;
+    const codList = (codOverride ?? trackingCod).split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    const paidList = (paidOverride ?? trackingPaid).split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
     const all = [...codList, ...paidList];
     if (!all.length) return;
     setLooking(true);
@@ -395,7 +402,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       const newQty = {};
       let unmatchedProducts = new Set();
       const withClassification = data.matched.map(order => {
-        const normTrack = (order.trackingNumber || '').replace(/\s+/g, '').toUpperCase();
+        const normTrack = (order.matchedInput || order.trackingNumber || '').replace(/\s+/g, '').toUpperCase();
         const isPaidBox = paidSet.has(normTrack) && !codSet.has(normTrack);
         order.lineItems.forEach(li => {
           const p = matchProduct(li.title, li.variant);
@@ -416,12 +423,53 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
         codCount, paidCount,
         notFound: data.notFound,
         unmatchedProducts: [...unmatchedProducts],
-        matches: withClassification.map(o => ({ tracking: o.trackingNumber, orderName: o.name, isPaidBox: o.isPaidBox })),
+        matches: withClassification.map(o => {
+          const key = (o.matchedInput || o.trackingNumber || '').replace(/\s+/g, '').toLowerCase();
+          const excel = info && info.cod[key] !== undefined ? info.cod[key] : null;
+          const diff = excel !== null && !o.isPaidBox ? Math.round((o.total - excel) * 100) / 100 : null;
+          return { tracking: o.trackingNumber || o.matchedInput, orderName: o.name, isPaidBox: o.isPaidBox, total: o.total, excel, diff };
+        }),
+        totalCapital: withClassification.reduce((sum, o) => sum + o.lineItems.reduce((c, li) => { const pp = matchProduct(li.title, li.variant); return c + (pp ? li.quantity * pp.cost : 0); }, 0), 0),
       });
     } catch (err) {
       alert('Lookup failed: ' + err.message);
     }
     setLooking(false);
+  }
+
+  async function importNetExcel(file) {
+    if (!file) return;
+    try {
+      const XLSX = await import('xlsx');
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: null });
+      const rate = Number(netRate) || 89500;
+      const fees = {}, cod = {};
+      const codLabels = [], paidLabels = [];
+      let usd = 0, lbp = 0, feeTotal = 0;
+      rows.forEach(r => {
+        const label = String(r.UPOAlternateReference || '').trim();
+        if (!/^herjewels-\d+$/i.test(label)) return; // skips blank and Total rows
+        const key = label.toLowerCase();
+        const u = Number(r.CODAmountUSD) || 0, l = Number(r.CODAmountLBP) || 0, f = Number(r.UPOTotalPrice) || 0;
+        fees[key] = f; feeTotal += f;
+        if (u > 0 || l > 0) { codLabels.push(label); cod[key] = u + l / rate; usd += u; lbp += l; }
+        else paidLabels.push(label);
+      });
+      if (!codLabels.length && !paidLabels.length) { alert('No herjewels-XXXX rows found in this file.'); return; }
+      const codText = codLabels.join('\n'), paidText = paidLabels.join('\n');
+      const info = { fees, cod, rows: codLabels.length + paidLabels.length, usd, lbp, feeTotal };
+      const net = Math.round((usd + lbp / rate - feeTotal) * 100) / 100;
+      setNetInfo(info);
+      setTrackingCod(codText); setTrackingPaid(paidText);
+      setDelivered(String(codLabels.length));
+      setRevenueCod(String(net));
+      if (!label) setLabel('The Net payout');
+      await lookupTracking(codText, paidText, info);
+    } catch (err) {
+      alert('Could not read the Excel: ' + err.message);
+    }
   }
 
   async function saveWeek() {
@@ -432,7 +480,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
       const paidOrderCount = matchedOrders.filter(o => o.isPaidBox).length;
 
       const payload = {
-        label: label || `Week ${date}`, week_date: date, kind: 'topspeed',
+        label: label || `Week ${date}`, week_date: date, kind: codKind,
         delivered: Number(delivered) || 0, cancelled: Number(cancelled) || 0,
         revenue_cod: Number(revenueCod) || 0, revenue_paid: paidRevenue, paid_orders: paidOrderCount,
       };
@@ -486,8 +534,8 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
           return {
             order_name: o.name, tracking_number: o.trackingNumber,
             placed_at: (o.createdAt || '').slice(0, 10) || date,
-            total: o.total, capital, fee: o.isPaidBox ? (o.total * 0.02) : avgFee,
-            kind: o.isPaidBox ? 'prepaid' : 'topspeed', week_id: weekId,
+            total: o.total, capital, fee: o.isPaidBox ? (o.total * 0.02) : (netInfo && netInfo.fees[(o.matchedInput || o.trackingNumber || '').replace(/\s+/g, '').toLowerCase()] !== undefined ? netInfo.fees[(o.matchedInput || o.trackingNumber || '').replace(/\s+/g, '').toLowerCase()] : avgFee),
+            kind: o.isPaidBox ? 'prepaid' : codKind, week_id: weekId,
           };
         });
         const { error: oerr } = await supabase.from('orders').insert(orderRows);
@@ -511,13 +559,13 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
 
   return (
     <div className="panel">
-      <h2>Weeks <small>one entry per Topspeed paper - COD and already-paid orders together, exactly like the real paper</small></h2>
+      {isNet ? <h2>The Net <small>one entry per payout Excel - COD and already-paid orders together</small></h2> : <h2>Weeks <small>one entry per Topspeed paper - COD and already-paid orders together, exactly like the real paper</small></h2>}
       <table className="tbl">
         <thead>
-          <tr><th>Week</th><th>Delivered (COD)</th><th>Prepaid</th><th>Cancelled</th><th>Revenue</th><th>Cash - Topspeed</th><th>Cash - Prepaid</th><th>Capital</th><th>Packaging</th><th></th></tr>
+          <tr><th>Week</th><th>Delivered (COD)</th><th>Prepaid</th><th>Cancelled</th><th>Revenue</th><th>{isNet ? 'Cash - The Net' : 'Cash - Topspeed'}</th><th>Cash - Prepaid</th><th>Capital</th><th>Packaging</th><th></th></tr>
         </thead>
         <tbody>
-          {legacy.map(b => (
+          {(isNet ? [] : legacy).map(b => (
             <tr key={'lg' + b.id} style={{ opacity: .65 }}>
               <td>{b.label} <span className="mini">(legacy)</span></td>
               <td>{b.delivered}</td><td>0</td><td>{b.cancelled}</td>
@@ -555,7 +603,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                         );
                       }) : <div className="mini">No products logged.</div>}
                       <div className="mini" style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--line)'}}>
-                        <b>COD orders:</b> {orders.filter(o => o.week_id === w.id && o.kind === 'topspeed').map(o => `${o.order_name} (${o.tracking_number})`).join(', ') || 'none'}
+                        <b>COD orders:</b> {orders.filter(o => o.week_id === w.id && o.kind === codKind).map(o => `${o.order_name} (${o.tracking_number})`).join(', ') || 'none'}
                       </div>
                       <div className="mini">
                         <b>Already-paid orders:</b> {orders.filter(o => o.week_id === w.id && o.kind === 'prepaid').map(o => `${o.order_name} (${o.tracking_number})`).join(', ') || 'none'}
@@ -580,13 +628,29 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
             <div className="field"><label>Cancelled orders</label><input type="number" value={cancelled} onChange={e => setCancelled(e.target.value)} /></div>
           </div>
           <div className="newweek-grid">
-            <div className="field"><label>Revenue - COD (Topspeed's "Amount To Be Paid", already net)</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
+            <div className="field"><label>Revenue - COD ({isNet ? 'cash The Net pays you, after fees' : 'Topspeed\'s "Amount To Be Paid", already net'})</label><input type="number" step="0.01" value={revenueCod} onChange={e => setRevenueCod(e.target.value)} /></div>
           </div>
           <div className="note" style={{ marginBottom: 10 }}>Revenue - Paid calculates itself below, from the real Shopify totals of whatever you paste into the second box.</div>
 
+          {isNet && <div className="week-detail" style={{ background: '#fff7e0', marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
+              The Net payout Excel - fills everything below (orders, fees, cash received)
+            </label>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="file" accept=".xlsx,.xls" onChange={e => { importNetExcel(e.target.files[0]); e.target.value = ''; }} />
+              <span className="mini">LBP rate $1 =</span>
+              <input type="number" value={netRate} onChange={e => setNetRate(e.target.value)} style={{ width: 100 }} />
+            </div>
+            {netInfo && (
+              <div className="note" style={{ marginTop: 8 }}>
+                {netInfo.rows} orders - COD ${netInfo.usd.toFixed(2)} + {netInfo.lbp.toLocaleString()} LBP - fees ${netInfo.feeTotal.toFixed(2)} = <b>expected cash ${(netInfo.usd + netInfo.lbp / (Number(netRate) || 89500) - netInfo.feeTotal).toFixed(2)}</b> (already in Revenue - COD above; change it if The Net paid a different amount)
+              </div>
+            )}
+          </div>}
+
           <div className="week-detail" style={{ background: '#f4f0e2', marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
-              COD tracking numbers - orders Topspeed is collecting cash for
+              {isNet ? 'COD orders - order numbers (1558, #1558) or labels (herjewels-1558)' : 'COD tracking numbers - orders Topspeed is collecting cash for'}
             </label>
             <textarea
               value={trackingCod}
@@ -606,11 +670,11 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
               placeholder={'SS0033487 21'}
             />
             <div style={{ marginTop: 8 }}>
-              <button className="btn gold" onClick={lookupTracking} disabled={looking}>{looking ? 'Looking up...' : 'Look up in Shopify'}</button>
+              <button className="btn gold" onClick={() => lookupTracking()} disabled={looking}>{looking ? 'Looking up...' : 'Look up in Shopify'}</button>
             </div>
             {lookupResult && (
               <div className="note" style={{ marginTop: 8 }}>
-                Matched {lookupResult.matchedCount} orders - {lookupResult.codCount} COD, {lookupResult.paidCount} already paid. Product quantities filled in below.
+                Matched {lookupResult.matchedCount} orders - {lookupResult.codCount} COD, {lookupResult.paidCount} already paid. Capital for these orders: {money(lookupResult.totalCapital || 0)}. Product quantities filled in below.
                 {lookupResult.notFound.length > 0 && (
                   <div style={{ color: 'var(--bad)', marginTop: 4 }}>
                     Not found ({lookupResult.notFound.length}): {lookupResult.notFound.join(', ')}
@@ -627,7 +691,7 @@ function Weeks({ weeks, legacy, products, orders, weekTotals, reload }) {
                     {[...lookupResult.matches].sort((a, b) => (a.isPaidBox === b.isPaidBox ? 0 : a.isPaidBox ? 1 : -1)).map((m, i) => (
                       <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11.5 }}>
                         <span>{m.tracking}</span>
-                        <span style={{ fontWeight: 700, color: m.isPaidBox ? 'var(--good)' : 'var(--ink)' }}>{m.orderName} {m.isPaidBox ? '(paid)' : ''}</span>
+                        <span style={{ fontWeight: 700, color: m.isPaidBox ? 'var(--good)' : 'var(--ink)' }}>{m.orderName} {m.isPaidBox ? '(paid)' : ''}{m.diff !== null && Math.abs(m.diff) >= 1 ? <span style={{ color: 'var(--bad)' }}> Shopify ${m.total.toFixed(2)} vs Excel ${m.excel.toFixed(2)}</span> : null}</span>
                       </div>
                     ))}
                   </div>
@@ -1155,7 +1219,7 @@ function Performance({ orders, ads, products }) {
         });
         let status, fee, isReal, reason = '';
         if (logged && logged.kind === 'prepaid') { status = 'Collected - Prepaid'; fee = 0; isReal = true; capital = Number(logged.capital); }
-        else if (logged) { status = 'Collected - Topspeed'; fee = Number(logged.fee || 0); isReal = true; capital = Number(logged.capital); }
+        else if (logged) { status = logged.kind === 'thenet' ? 'Collected - The Net' : 'Collected - Topspeed'; fee = Number(logged.fee || 0); isReal = true; capital = Number(logged.capital); }
         else if (o.fulfillmentStatus !== 'fulfilled') { status = 'Pending'; reason = 'not shipped yet, unpaid'; fee = 3.5; isReal = false; }
         else if (['pending', 'authorized', 'partially_paid'].includes(o.financialStatus)) { status = 'Pending'; reason = 'shipped, awaiting payment'; fee = 3.5; isReal = false; }
         else { status = 'Paid - not saved yet'; reason = 'paid in Shopify, not on a saved paper'; fee = 3.5; isReal = false; }
