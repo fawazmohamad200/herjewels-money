@@ -50,7 +50,7 @@ export async function POST(request) {
       const data = await res.json();
       (data.orders || []).forEach(o => {
         byNumber.set(String(o.order_number), o);
-        (o.fulfillments || []).forEach(f => {
+        (o.fulfillments || []).filter(f => f.status !== 'cancelled').forEach(f => {
           const nums = [f.tracking_number, ...(f.tracking_numbers || [])].filter(Boolean);
           nums.forEach(n => byTracking.set(norm(n), o));
         });
@@ -67,11 +67,14 @@ export async function POST(request) {
       if (!o) { notFound.push(input); return; }
       if (seen.has(o.id)) return; // same order typed twice
       seen.add(o.id);
-      const tracking = (o.fulfillments || []).map(f => f.tracking_number).filter(Boolean)[0] || '';
+      const allTracking = (o.fulfillments || []).filter(f => f.status !== 'cancelled').map(f => f.tracking_number).filter(Boolean);
+      // If the order has more than one fulfillment, show the one that was typed, else the Net label, else the first.
+      const tracking = allTracking.find(t => norm(t) === norm(input)) || allTracking.find(t => /^herjewels-/i.test(t)) || allTracking[0] || '';
       matched.push({
         name: o.name,
         trackingNumber: tracking || input,
         matchedInput: input,
+        allTracking,
         total: parseFloat(o.total_price),
         createdAt: o.created_at,
         financialStatus: o.financial_status,
