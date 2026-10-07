@@ -1,30 +1,33 @@
-// This runs on the server only. Your Shopify credentials never reach the browser.
+// Finds Shopify orders from a pasted list. Each line can be:
+//   an order number  -> 1558, #1558
+//   a Net label      -> herjewels-1558
+//   a tracking no.   -> SS003199115 (Topspeed) or any fulfillment tracking number
 
 async function getAccessToken(domain, clientId, clientSecret) {
   const res = await fetch(`https://${domain}/admin/oauth/access_token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: clientId,
-      client_secret: clientSecret,
-    }).toString(),
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret }).toString(),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Could not get Shopify access token: ${res.status} ${text}`);
-  }
-  const data = await res.json();
-  return data.access_token;
+  if (!res.ok) throw new Error(`Could not get Shopify access token: ${res.status} ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
+const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+
+function orderNumberOf(input) {
+  const t = norm(input);
+  let m = t.match(/^herjewels-?(\d+)$/);
+  if (m) return m[1];
+  m = t.match(/^#?(\d{3,6})$/);
+  return m ? m[1] : null;
 }
 
 export async function POST(request) {
   try {
-    const { trackingNumbers } = await request.json();
-    if (!Array.isArray(trackingNumbers) || trackingNumbers.length === 0) {
-      return Response.json({ error: 'No tracking numbers provided' }, { status: 400 });
-    }
-    const wanted = new Set(trackingNumbers.map(t => String(t).replace(/\s+/g, '').toUpperCase()));
+    const body = await request.json();
+    const inputs = (body.trackingNumbers || []).map(s => String(s).trim()).filter(Boolean);
+    if (!inputs.length) return Response.json({ error: 'Nothing to look up' }, { status: 400 });
 
     const domain = process.env.SHOPIFY_STORE_DOMAIN;
     const clientId = process.env.SHOPIFY_CLIENT_ID;
@@ -32,62 +35,52 @@ export async function POST(request) {
     if (!domain || !clientId || !clientSecret) {
       return Response.json({ error: 'Shopify is not connected yet - missing credentials on the server.' }, { status: 500 });
     }
-
     const token = await getAccessToken(domain, clientId, clientSecret);
 
-    // Look back 60 days - plenty for a weekly workflow, keeps each request fast.
-    const since = new Date();
-    since.setDate(since.getDate() - 60);
-    const createdMin = since.toISOString();
+    const since = new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString();
+    let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(since)}&limit=250&fields=id,name,order_number,total_price,created_at,cancelled_at,financial_status,fulfillment_status,fulfillments,line_items,payment_gateway_names`;
 
-    let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(createdMin)}&limit=250&fields=id,name,total_price,created_at,financial_status,payment_gateway_names,line_items,fulfillments`;
-
-    const matched = [];
+    const byNumber = new Map(); // "1558" -> order
+    const byTracking = new Map(); // normalized tracking -> order
     let guard = 0;
-    while (url && guard < 20) {
+    while (url && guard < 40) {
       guard++;
-      const res = await fetch(url, {
-        headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        return Response.json({ error: `Shopify error: ${res.status} ${text}` }, { status: 502 });
-      }
+      const res = await fetch(url, { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' } });
+      if (!res.ok) return Response.json({ error: `Shopify error: ${res.status} ${await res.text()}` }, { status: 502 });
       const data = await res.json();
-      const orders = data.orders || [];
-
-      for (const o of orders) {
-        const trackNums = (o.fulfillments || [])
-          .flatMap(f => (f.tracking_numbers && f.tracking_numbers.length ? f.tracking_numbers : (f.tracking_number ? [f.tracking_number] : [])))
-          .map(t => String(t).replace(/\s+/g, '').toUpperCase());
-        const hit = trackNums.find(t => wanted.has(t));
-        if (hit) {
-          const gateways = (o.payment_gateway_names || []).join(',').toLowerCase();
-          const isPrepaid = gateways.includes('whish');
-          matched.push({
-            name: o.name,
-            trackingNumber: hit,
-            total: parseFloat(o.total_price),
-            financialStatus: o.financial_status,
-            isPrepaid,
-            createdAt: o.created_at,
-            lineItems: (o.line_items || []).map(li => ({
-              title: li.title,
-              variant: li.variant_title || '',
-              quantity: li.quantity,
-            })),
-          });
-        }
-      }
-
-      // Shopify pagination via Link header
+      (data.orders || []).forEach(o => {
+        byNumber.set(String(o.order_number), o);
+        (o.fulfillments || []).forEach(f => {
+          const nums = [f.tracking_number, ...(f.tracking_numbers || [])].filter(Boolean);
+          nums.forEach(n => byTracking.set(norm(n), o));
+        });
+      });
       const link = res.headers.get('link') || res.headers.get('Link');
-      const nextMatch = link && link.match(/<([^>]+)>;\s*rel="next"/);
-      url = nextMatch ? nextMatch[1] : null;
+      const next = link && link.match(/<([^>]+)>;\s*rel="next"/);
+      url = next ? next[1] : null;
     }
 
-    const foundTracking = new Set(matched.map(m => m.trackingNumber));
-    const notFound = [...wanted].filter(t => !foundTracking.has(t));
+    const matched = [], notFound = [], seen = new Set();
+    inputs.forEach(input => {
+      const num = orderNumberOf(input);
+      const o = (num && byNumber.get(num)) || byTracking.get(norm(input));
+      if (!o) { notFound.push(input); return; }
+      if (seen.has(o.id)) return; // same order typed twice
+      seen.add(o.id);
+      const tracking = (o.fulfillments || []).map(f => f.tracking_number).filter(Boolean)[0] || '';
+      matched.push({
+        name: o.name,
+        trackingNumber: tracking || input,
+        matchedInput: input,
+        total: parseFloat(o.total_price),
+        createdAt: o.created_at,
+        financialStatus: o.financial_status,
+        fulfillmentStatus: o.fulfillment_status,
+        cancelledAt: o.cancelled_at || null,
+        gateways: o.payment_gateway_names || [],
+        lineItems: (o.line_items || []).map(li => ({ title: li.title, variant: li.variant_title || '', quantity: li.quantity })),
+      });
+    });
 
     return Response.json({ matched, notFound });
   } catch (err) {
