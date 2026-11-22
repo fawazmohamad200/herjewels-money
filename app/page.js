@@ -30,6 +30,8 @@ export default function Home() {
   const [orders, setOrders] = useState([]); // individual real orders, for the Performance report
   const [funds, setFunds] = useState([]); // packaging/capital/employee/other ledger entries
   const [settings, setSettings] = useState({ bank: 0 });
+  // Whish Pay orders already paid in Shopify that are NOT saved in any week yet (shown separately on the Dashboard)
+  const [whish, setWhish] = useState({ orders: [], loading: false, err: '' });
 
   useEffect(() => {
     if (unlocked) loadAll();
@@ -72,6 +74,41 @@ export default function Home() {
     }
     setLoading(false);
   }
+
+  async function loadWhish() {
+    setWhish(w => ({ ...w, loading: true, err: '' }));
+    try {
+      // Look back to the day of the oldest order saved in Weeks - anything older was counted before this tracking existed.
+      const dates = orders.map(o => o.placed_at).filter(Boolean);
+      if (!dates.length) { setWhish({ orders: [], loading: false, err: '' }); return; }
+      const from = dates.reduce((a, b) => (a < b ? a : b));
+      const to = new Date(Date.now() + 86400000).toISOString().slice(0, 10); // tomorrow, so late-evening orders are never cut off
+      const res = await fetch('/api/shopify-orders-range', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromDate: from, toDate: to }),
+      });
+      const data = await res.json();
+      if (data.error) { setWhish({ orders: [], loading: false, err: data.error }); return; }
+      const saved = new Set(orders.map(o => o.order_name));
+      const list = (data.orders || []).filter(o =>
+        !o.cancelledAt &&
+        ['paid', 'partially_refunded'].includes(o.financialStatus) &&
+        (o.gateways || []).some(g => /whish/i.test(g)) &&
+        !saved.has(o.name)
+      ).map(o => {
+        const gross = o.currentTotal != null ? o.currentTotal : o.total; // after any partial refund
+        return { name: o.name, placedAt: o.placedAt, gross, net: gross * 0.98, shipped: o.fulfillmentStatus === 'fulfilled' };
+      });
+      setWhish({ orders: list, loading: false, err: '' });
+    } catch (err) {
+      setWhish({ orders: [], loading: false, err: err.message || 'Could not load Whish orders' });
+    }
+  }
+
+  useEffect(() => {
+    if (unlocked && !loading && tab === 'dashboard') loadWhish();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlocked, loading, tab, orders, weeks]);
 
   function handleKey(k) {
     if (k === '⌫') { setPinInput(p => p.slice(0, -1)); setPinErr(''); return; }
@@ -213,7 +250,7 @@ export default function Home() {
       <div className="body">
         {loading ? <div className="loading">Loading...</div> : (
           <>
-            {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} weeksCount={weeks.length} />}
+            {tab === 'dashboard' && <Dashboard totals={totals} settings={settings} weeksCount={weeks.length} whish={whish} />}
             {tab === 'weeks' && <Weeks mode="topspeed" weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'thenet' && <Weeks mode="thenet" weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'funds' && <Funds funds={funds} totals={totals} reload={loadAll} />}
@@ -237,9 +274,11 @@ export default function Home() {
   );
 }
 
-function Dashboard({ totals: c, settings, weeksCount }) {
+function Dashboard({ totals: c, settings, weeksCount, whish }) {
   const diff = (Number(settings.bank) || 0) - c.cashOnHand;
   const diffOk = Math.abs(diff) < 1;
+  const whishNet = whish.orders.reduce((s, o) => s + o.net, 0);
+  const whishUnshipped = whish.orders.filter(o => !o.shipped).length;
   return (
     <>
       <div className="kpis">
@@ -247,6 +286,35 @@ function Dashboard({ totals: c, settings, weeksCount }) {
         <div className="kpi"><div className="lbl">Cash Out</div><div className="val">{money(c.cashOut)}</div></div>
         <div className="kpi good"><div className="lbl">Cash On Hand</div><div className="val">{money(c.cashOnHand)}</div></div>
         <div className="kpi good"><div className="lbl">Net - truly spendable</div><div className="val">{money(c.net)}</div></div>
+      </div>
+
+      <div className="panel">
+        <h2>Whish received <small>paid with Whish Pay, not saved in a week yet &middot; kept separate, NOT in Cash On Hand</small></h2>
+        {whish.err ? (
+          <div className="flag">Could not load Whish orders: {whish.err}</div>
+        ) : (
+          <>
+            <div className="kpis" style={{ marginBottom: 8 }}>
+              <div className="kpi accent"><div className="lbl">Whish balance (after 2% fee)</div><div className="val">{whish.loading && !whish.orders.length ? '...' : money(whishNet)}</div></div>
+              <div className="kpi"><div className="lbl">Orders</div><div className="val">{whish.orders.length}</div></div>
+              <div className="kpi"><div className="lbl">Not shipped yet</div><div className="val">{whishUnshipped}</div></div>
+            </div>
+            {whish.orders.length > 0 && (
+              <details>
+                <summary className="mini" style={{ cursor: 'pointer' }}>Show the {whish.orders.length} orders</summary>
+                <table className="tbl">
+                  <thead><tr><td>Order</td><td>Placed</td><td>Total</td><td>After 2% fee</td><td>Shipped</td></tr></thead>
+                  <tbody>
+                    {whish.orders.map(o => (
+                      <tr key={o.name}><td>{o.name}</td><td>{o.placedAt}</td><td>{money(o.gross)}</td><td>{money(o.net)}</td><td>{o.shipped ? 'Yes' : 'Not yet'}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            )}
+            <div className="note">Counts Shopify orders paid with Whish Pay that are not cancelled or refunded and are not saved in any week. When you save an order in a Weeks or The Net page (as already-paid), it moves out of here and into Cash On Hand, so nothing is counted twice.</div>
+          </>
+        )}
       </div>
 
       <div className="panel">
