@@ -39,7 +39,7 @@ export async function POST(request) {
     // or early-morning orders get cut off into the previous day by mistake.
     const createdMin = `${fromDate}T00:00:00+03:00`;
     const createdMax = `${toDate}T23:59:59+03:00`;
-    let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(createdMin)}&created_at_max=${encodeURIComponent(createdMax)}&limit=250&fields=id,name,total_price,created_at,cancelled_at,financial_status,fulfillment_status,line_items`;
+    let url = `https://${domain}/admin/api/2024-10/orders.json?status=any&created_at_min=${encodeURIComponent(createdMin)}&created_at_max=${encodeURIComponent(createdMax)}&limit=250&fields=id,name,total_price,current_total_price,created_at,cancelled_at,financial_status,fulfillment_status,line_items,payment_gateway_names`;
 
     const allOrders = [];
     let guard = 0;
@@ -56,6 +56,8 @@ export async function POST(request) {
       (data.orders || []).forEach(o => {
         allOrders.push({
           name: o.name, total: parseFloat(o.total_price),
+          currentTotal: o.current_total_price != null ? parseFloat(o.current_total_price) : null,
+          gateways: o.payment_gateway_names || [],
           placedAt: (o.created_at || '').slice(0, 10),
           financialStatus: o.financial_status, fulfillmentStatus: o.fulfillment_status, cancelledAt: o.cancelled_at || null,
           lineItems: (o.line_items || []).map(li => ({ title: li.title, variant: li.variant_title || '', quantity: li.quantity })),
