@@ -11,6 +11,13 @@ function money(n) {
   const v = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return (neg ? '-$' : '$') + v;
 }
+// Packaging cost per shipped order, by date: the latest rate whose start date is on or before the order's date.
+// Before any rate is set (or if the table doesn't exist yet) it is $1, exactly like before.
+function rateOn(rates, dateStr) {
+  let r = 1;
+  (rates || []).forEach(x => { if (x.effective_from <= (dateStr || '9999-12-31')) r = Number(x.cost); });
+  return r;
+}
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -30,6 +37,7 @@ export default function Home() {
   const [orders, setOrders] = useState([]); // individual real orders, for the Performance report
   const [funds, setFunds] = useState([]); // packaging/capital/employee/other ledger entries
   const [settings, setSettings] = useState({ bank: 0 });
+  const [pkgRates, setPkgRates] = useState([]); // packaging cost per order, with the date it starts
   // Whish Pay orders already paid in Shopify that are NOT saved in any week yet (shown separately on the Dashboard)
   const [whish, setWhish] = useState({ orders: [], loading: false, err: '' });
 
@@ -68,6 +76,9 @@ export default function Home() {
       setOrders(ordRows || []);
       setFunds(fundRows || []);
       setSettings(st || { bank: 0 });
+      // Separate and tolerant: if the packaging_rates table isn't created yet, the app keeps working at $1 per order.
+      const { data: pr } = await supabase.from('packaging_rates').select('*').order('effective_from', { ascending: true });
+      setPkgRates(pr || []);
     } catch (err) {
       console.error(err);
       setDbError('Could not reach the database. Check your internet connection, or the app may not be set up yet.');
@@ -146,7 +157,10 @@ export default function Home() {
     const revCod = Number(w.revenue_cod) || 0;   // already net - what Topspeed actually pays you
     const revPaid = Number(w.revenue_paid) || 0; // already net - prepaid cash received
     const shippedOrders = (Number(w.delivered) || 0) + (Number(w.paid_orders) || 0);
-    const packaging = shippedOrders * 1;
+    // Each saved order uses the packaging rate of the day it was PLACED; any shipped orders without a saved record use the week's date.
+    const rows = orders.filter(o => o.week_id === w.id);
+    const packaging = rows.reduce((s, o) => s + rateOn(pkgRates, o.placed_at), 0)
+      + Math.max(0, shippedOrders - rows.length) * rateOn(pkgRates, w.week_date);
     return {
       revenue: revCod + revPaid, capital: capCod + capPaid, packaging,
       cashTopspeed: revCod, cashPaid: revPaid, cash: revCod + revPaid,
@@ -202,7 +216,7 @@ export default function Home() {
       employeeCost, otherCost, personalCost, adsTotal, deliveredTotal, cancelledTotal, revenueTotal,
       cashIn, cashOut, cashOnHand, net,
     };
-  }, [weeks, legacy, ads, funds]);
+  }, [weeks, legacy, ads, funds, orders, pkgRates]);
 
   if (!unlocked) {
     const dots = Array.from({ length: 4 }).map((_, i) => (
@@ -255,8 +269,8 @@ export default function Home() {
             {tab === 'thenet' && <Weeks mode="thenet" weeks={weeks} legacy={legacy} products={products} orders={orders} weekTotals={weekTotals} reload={loadAll} />}
             {tab === 'funds' && <Funds funds={funds} totals={totals} reload={loadAll} />}
             {tab === 'personal' && <Personal funds={funds} totals={totals} reload={loadAll} />}
-            {tab === 'performance' && <Performance orders={orders} ads={ads} products={products} />}
-            {tab === 'products' && <Products products={products} reload={loadAll} />}
+            {tab === 'performance' && <Performance orders={orders} ads={ads} products={products} pkgRates={pkgRates} />}
+            {tab === 'products' && <Products products={products} pkgRates={pkgRates} reload={loadAll} />}
             {tab === 'ads' && <Ads ads={ads} legacy={legacy} reload={loadAll} />}
             {tab === 'settings' && <Settings settings={settings} reload={loadAll} />}
           </>
@@ -1060,7 +1074,48 @@ function Personal({ funds, totals, reload }) {
   );
 }
 
-function Products({ products, reload }) {
+function PackagingCost({ pkgRates, reload }) {
+  const [cost, setCost] = useState('');
+  const [from, setFrom] = useState(todayStr());
+  const current = rateOn(pkgRates, todayStr());
+
+  async function save() {
+    const c = Number(cost);
+    if (!(c >= 0) || cost === '' || !from) { alert('Enter the new cost and the start date.'); return; }
+    const { error } = await supabase.from('packaging_rates').upsert({ effective_from: from, cost: c }, { onConflict: 'effective_from' });
+    if (error) { alert('Could not save. Did you run the packaging_rates SQL in Supabase yet? ' + error.message); return; }
+    setCost('');
+    await reload();
+  }
+  async function remove(id) {
+    if (!confirm('Remove this packaging cost? Orders from that date go back to the previous cost.')) return;
+    const { error } = await supabase.from('packaging_rates').delete().eq('id', id);
+    if (error) { alert('Could not remove: ' + error.message); return; }
+    await reload();
+  }
+
+  return (
+    <div className="panel">
+      <h2>Packaging cost per order <small>now {money(current)} &middot; a new cost only applies to orders placed from its start date - older orders keep their old cost</small></h2>
+      <div className="newweek-grid">
+        <div className="field"><label>New cost per order $</label><input type="number" step="0.01" value={cost} onChange={e => setCost(e.target.value)} /></div>
+        <div className="field"><label>Applies to orders placed from</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} /></div>
+        <button className="btn gold" onClick={save}>Set packaging cost</button>
+      </div>
+      <table className="tbl" style={{ marginTop: 10 }}>
+        <thead><tr><th>From</th><th>Cost per order</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Before the first date below (original)</td><td>{money(1)}</td><td></td></tr>
+          {pkgRates.map(r => (
+            <tr key={r.id}><td>{r.effective_from}</td><td>{money(r.cost)}</td><td><button className="btn ghost2" onClick={() => remove(r.id)}>Remove</button></td></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Products({ products, pkgRates, reload }) {
   const [editing, setEditing] = useState({}); // id -> {price, cost}
   const [adding, setAdding] = useState(false);
   const [newP, setNewP] = useState({ name: '', variant: '', price: '', cost: '' });
@@ -1092,6 +1147,8 @@ function Products({ products, reload }) {
   }
 
   return (
+    <>
+    <PackagingCost pkgRates={pkgRates} reload={reload} />
     <div className="panel">
       <h2>Products <small>edit price/cost anytime - only future weeks use the new numbers, past weeks stay locked</small></h2>
       <table className="tbl">
@@ -1137,6 +1194,7 @@ function Products({ products, reload }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -1225,7 +1283,7 @@ function Ads({ ads, legacy, reload }) {
   );
 }
 
-function Performance({ orders, ads, products }) {
+function Performance({ orders, ads, products, pkgRates }) {
   const earliest = orders.length ? orders.map(o => o.placed_at).reduce((a, b) => (a < b ? a : b)) : todayStr();
   const [from, setFrom] = useState(earliest);
   const [to, setTo] = useState(todayStr());
@@ -1309,7 +1367,7 @@ function Performance({ orders, ads, products }) {
   const totalOrderValue = allOrders ? allOrders.reduce((s, o) => s + o.total, 0) : 0;
   const totalCapital = allOrders ? allOrders.reduce((s, o) => s + o.capital, 0) : 0;
   const totalFees = allOrders ? allOrders.reduce((s, o) => s + o.fee, 0) : 0;
-  const packaging = allOrders ? allOrders.length * 1 : 0;
+  const packaging = allOrders ? allOrders.reduce((s, o) => s + rateOn(pkgRates, o.placedAt), 0) : 0;
   const netRevenue = totalOrderValue - totalFees;
   const estimatedProfit = netRevenue - totalCapital - packaging - adSpend;
   const collectedCount = allOrders ? allOrders.filter(o => o.isReal).length : 0;
